@@ -29,7 +29,7 @@ A powerful Command Line Interface tool for Unity development workflow automation
 
 1. Open Unity Package Manager
 2. Click the `+` button and select "Add package from git URL"
-3. Enter: `https://github.com/vibe-unity/vibe-unity.git`
+3. Enter: `https://github.com/RICoder72/vibe-unity.git`
 
 ### Method 2: Manual Installation
 
@@ -39,7 +39,7 @@ A powerful Command Line Interface tool for Unity development workflow automation
 
 ### Method 3: Unity Package
 
-1. Download the latest `.unitypackage` from [Releases](https://github.com/vibe-unity/vibe-unity/releases)
+1. Download the latest `.unitypackage` from [Releases](https://github.com/RICoder72/vibe-unity/releases)
 2. Import into your Unity project via `Assets > Import Package > Custom Package`
 
 ## 🐧 WSL Setup (Windows Users)
@@ -652,8 +652,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📞 Support
 
-- **Issues**: [GitHub Issues](https://github.com/unity-vibe/vibe-unity/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/unity-vibe/vibe-unity/discussions)
+- **Issues**: [GitHub Issues](https://github.com/RICoder72/vibe-unity/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/RICoder72/vibe-unity/discussions)
 - **Email**: contact@vibe-unity.com
 
 ---
