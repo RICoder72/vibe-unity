@@ -568,7 +568,7 @@ namespace VibeUnity.Editor
         
         /// <summary>
         /// Command line entry point for adding UI buttons.
-        /// Usage: Unity -batchmode -quit -executeMethod VibeUnity.Editor.CLI.AddButtonFromCommandLine button_name [parent_name] [button_text] [width] [height] [anchor_preset]
+        /// Usage: Unity -batchmode -quit -executeMethod VibeUnity.Editor.CLI.AddButtonFromCommandLine button_name [parent_name] [scene_name] [button_text] [width] [height] [anchor_preset]
         /// </summary>
         public static void AddButtonFromCommandLine()
         {
@@ -576,22 +576,24 @@ namespace VibeUnity.Editor
             int idx = System.Array.FindIndex(args, arg => arg == "-executeMethod");
             if (idx == -1 || idx + 2 >= args.Length)
             {
-                Debug.LogError("[VibeUnityCLI] Invalid arguments. Usage: button_name [parent_name] [button_text] [width] [height] [anchor_preset]");
+                Debug.LogError("[VibeUnityCLI] Invalid arguments. Usage: button_name [parent_name] [scene_name] [button_text] [width] [height] [anchor_preset]");
                 EditorApplication.Exit(1);
                 return;
             }
 
             string buttonName = args[idx + 2];
             string parentName = args.Length > idx + 3 ? args[idx + 3] : null;
-            string buttonText = args.Length > idx + 4 ? args[idx + 4] : "Button";
-            float  width      = args.Length > idx + 5 ? float.Parse(args[idx + 5]) : 160f;
-            float  height     = args.Length > idx + 6 ? float.Parse(args[idx + 6]) : 30f;
-            string anchor     = args.Length > idx + 7 ? args[idx + 7] : "MiddleCenter";
+            string sceneName  = args.Length > idx + 4 ? args[idx + 4] : null;
+            string buttonText = args.Length > idx + 5 ? args[idx + 5] : "Button";
+            float  width      = args.Length > idx + 6 ? float.Parse(args[idx + 6]) : 160f;
+            float  height     = args.Length > idx + 7 ? float.Parse(args[idx + 7]) : 30f;
+            string anchor     = args.Length > idx + 8 ? args[idx + 8] : "MiddleCenter";
             if (string.IsNullOrEmpty(parentName)) parentName = null;
+            if (string.IsNullOrEmpty(sceneName))  sceneName  = null;
 
-            Debug.Log($"[VibeUnityCLI] Adding button: {buttonName} (parent: {parentName ?? "auto"}, text: \"{buttonText}\")");
+            Debug.Log($"[VibeUnityCLI] Adding button: {buttonName} (parent: {parentName ?? "auto"}, scene: {sceneName ?? "current"}, text: \"{buttonText}\")");
 
-            bool success = VibeUnityUI.AddButton(buttonName, parentName, null, buttonText, width, height, anchor);
+            bool success = VibeUnityUI.AddButton(buttonName, parentName, sceneName, buttonText, width, height, anchor);
             if (success)
             {
                 Debug.Log($"[VibeUnityCLI] ✅ Successfully added button: {buttonName}");
@@ -607,7 +609,7 @@ namespace VibeUnity.Editor
         
         /// <summary>
         /// Command line entry point for adding UI text.
-        /// Usage: Unity -batchmode -quit -executeMethod VibeUnity.Editor.CLI.AddTextFromCommandLine text_name [parent_name] [text_content] [font_size] [width] [height] [anchor_preset]
+        /// Usage: Unity -batchmode -quit -executeMethod VibeUnity.Editor.CLI.AddTextFromCommandLine text_name [parent_name] [scene_name] [text_content] [font_size] [width] [height] [anchor_preset]
         /// </summary>
         public static void AddTextFromCommandLine()
         {
@@ -615,23 +617,25 @@ namespace VibeUnity.Editor
             int idx = System.Array.FindIndex(args, arg => arg == "-executeMethod");
             if (idx == -1 || idx + 2 >= args.Length)
             {
-                Debug.LogError("[VibeUnityCLI] Invalid arguments. Usage: text_name [parent_name] [text_content] [font_size] [width] [height] [anchor_preset]");
+                Debug.LogError("[VibeUnityCLI] Invalid arguments. Usage: text_name [parent_name] [scene_name] [text_content] [font_size] [width] [height] [anchor_preset]");
                 EditorApplication.Exit(1);
                 return;
             }
 
             string textName    = args[idx + 2];
             string parentName  = args.Length > idx + 3 ? args[idx + 3] : null;
-            string textContent = args.Length > idx + 4 ? args[idx + 4] : "New Text";
-            int    fontSize    = args.Length > idx + 5 ? int.Parse(args[idx + 5]) : 14;
-            float  width       = args.Length > idx + 6 ? float.Parse(args[idx + 6]) : 200f;
-            float  height      = args.Length > idx + 7 ? float.Parse(args[idx + 7]) : 50f;
-            string anchor      = args.Length > idx + 8 ? args[idx + 8] : "MiddleCenter";
+            string sceneName   = args.Length > idx + 4 ? args[idx + 4] : null;
+            string textContent = args.Length > idx + 5 ? args[idx + 5] : "New Text";
+            int    fontSize    = args.Length > idx + 6 ? int.Parse(args[idx + 6]) : 14;
+            float  width       = args.Length > idx + 7 ? float.Parse(args[idx + 7]) : 200f;
+            float  height      = args.Length > idx + 8 ? float.Parse(args[idx + 8]) : 50f;
+            string anchor      = args.Length > idx + 9 ? args[idx + 9] : "MiddleCenter";
             if (string.IsNullOrEmpty(parentName)) parentName = null;
+            if (string.IsNullOrEmpty(sceneName))  sceneName  = null;
 
-            Debug.Log($"[VibeUnityCLI] Adding text: {textName} (parent: {parentName ?? "auto"}, content: \"{textContent}\")");
+            Debug.Log($"[VibeUnityCLI] Adding text: {textName} (parent: {parentName ?? "auto"}, scene: {sceneName ?? "current"}, content: \"{textContent}\")");
 
-            bool success = VibeUnityUI.AddText(textName, parentName, null, textContent, fontSize, width, height, anchor);
+            bool success = VibeUnityUI.AddText(textName, parentName, sceneName, textContent, fontSize, width, height, anchor);
             if (success)
             {
                 Debug.Log($"[VibeUnityCLI] ✅ Successfully added text: {textName}");
