@@ -866,17 +866,22 @@ cmd_add_panel() {
 cmd_add_button() {
     local button_name=""
     local parent_name=""
+    local scene_name=""
     local button_text="Button"
     local width="160"
     local height="30"
     local anchor_preset="MiddleCenter"
     local use_session=false
-    
+
     # Parse arguments
     while [[ $# -gt 0 ]]; do
         case $1 in
             -p|--parent)
                 parent_name="$2"
+                shift 2
+                ;;
+            -s|--scene)
+                scene_name="$2"
                 shift 2
                 ;;
             -t|--text)
@@ -920,36 +925,38 @@ cmd_add_button() {
                 ;;
         esac
     done
-    
+
     # Apply session defaults if requested
     if [[ "$use_session" == "true" ]]; then
         if has_session; then
             [[ -z "$parent_name" ]] && parent_name=$(read_session "parent" "")
+            [[ -z "$scene_name" ]] && scene_name=$(read_session "scene" "")
             echo "📁 Using session defaults"
         else
             echo "⚠️  No active session found. Use 'vibe-unity start-session' to create one."
         fi
     fi
-    
+
     # Validate required arguments
     if [[ -z "$button_name" ]]; then
         echo "Error: Missing required button name"
         echo "Use 'vibe-unity add-button --help' for usage information."
         exit 1
     fi
-    
+
     echo "Unity Vibe CLI - Adding Button"
     echo "=============================="
     echo "Button Name: $button_name"
     echo "Parent: ${parent_name:-"auto-detect"}"
+    echo "Scene: ${scene_name:-"current"}"
     echo "Text: \"$button_text\""
     echo "Size: ${width}x${height}"
     echo "Anchor: $anchor_preset"
     echo "Project Path: $(get_project_path)"
     echo ""
-    
+
     # Use centralized execute_unity_command function that handles Unity detection
-    execute_unity_command "UnityVibe.Editor.CLI.AddButtonFromCommandLine" "$button_name" "$parent_name" "$button_text" "$width" "$height" "$anchor_preset"
+    execute_unity_command "UnityVibe.Editor.CLI.AddButtonFromCommandLine" "$button_name" "$parent_name" "$scene_name" "$button_text" "$width" "$height" "$anchor_preset"
     local exit_code=$?
     
     if [ $exit_code -eq 0 ]; then
@@ -966,18 +973,23 @@ cmd_add_button() {
 cmd_add_text() {
     local text_name=""
     local parent_name=""
+    local scene_name=""
     local text_content="New Text"
     local font_size="14"
     local width="200"
     local height="50"
     local anchor_preset="MiddleCenter"
     local use_session=false
-    
+
     # Parse arguments
     while [[ $# -gt 0 ]]; do
         case $1 in
             -p|--parent)
                 parent_name="$2"
+                shift 2
+                ;;
+            --scene)
+                scene_name="$2"
                 shift 2
                 ;;
             -t|--text)
@@ -1025,37 +1037,39 @@ cmd_add_text() {
                 ;;
         esac
     done
-    
+
     # Apply session defaults if requested
     if [[ "$use_session" == "true" ]]; then
         if has_session; then
             [[ -z "$parent_name" ]] && parent_name=$(read_session "parent" "")
+            [[ -z "$scene_name" ]] && scene_name=$(read_session "scene" "")
             echo "📁 Using session defaults"
         else
             echo "⚠️  No active session found. Use 'vibe-unity start-session' to create one."
         fi
     fi
-    
+
     # Validate required arguments
     if [[ -z "$text_name" ]]; then
         echo "Error: Missing required text name"
         echo "Use 'vibe-unity add-text --help' for usage information."
         exit 1
     fi
-    
+
     echo "Unity Vibe CLI - Adding Text"
     echo "============================"
     echo "Text Name: $text_name"
     echo "Parent: ${parent_name:-"auto-detect"}"
+    echo "Scene: ${scene_name:-"current"}"
     echo "Content: \"$text_content\""
     echo "Font Size: ${font_size}px"
     echo "Size: ${width}x${height}"
     echo "Anchor: $anchor_preset"
     echo "Project Path: $(get_project_path)"
     echo ""
-    
+
     # Use centralized execute_unity_command function that handles Unity detection
-    execute_unity_command "UnityVibe.Editor.CLI.AddTextFromCommandLine" "$text_name" "$parent_name" "$text_content" "$font_size" "$width" "$height" "$anchor_preset"
+    execute_unity_command "UnityVibe.Editor.CLI.AddTextFromCommandLine" "$text_name" "$parent_name" "$scene_name" "$text_content" "$font_size" "$width" "$height" "$anchor_preset"
     local exit_code=$?
     
     if [ $exit_code -eq 0 ]; then

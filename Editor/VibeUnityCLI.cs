@@ -439,157 +439,245 @@ namespace VibeUnity.Editor
         #region Command Line Interface Entry Points
         
         /// <summary>
-        /// Command line entry point for scene creation - DISABLED
-        /// Usage: Unity -batchmode -quit -executeMethod VibeUnity.Editor.CLI.CreateSceneFromCommandLine -projectPath "path/to/project" scene_name scene_path scene_type
+        /// Command line entry point for scene creation.
+        /// Usage: Unity -batchmode -quit -executeMethod VibeUnity.Editor.CLI.CreateSceneFromCommandLine -projectPath "path/to/project" scene_name scene_path [scene_type] [add_to_build]
         /// </summary>
         public static void CreateSceneFromCommandLine()
         {
-            // CLI commands disabled - functionality commented out
-            Debug.LogWarning("[VibeUnityCLI] CLI commands are disabled. Use internal API methods instead.");
-            return;
-            
-            /*
             string[] args = System.Environment.GetCommandLineArgs();
-            
-            // Find our arguments after -executeMethod
             int executeMethodIndex = System.Array.FindIndex(args, arg => arg == "-executeMethod");
-            if (executeMethodIndex == -1 || executeMethodIndex + 4 >= args.Length)
+            if (executeMethodIndex == -1 || executeMethodIndex + 3 >= args.Length)
             {
                 Debug.LogError("[VibeUnityCLI] Invalid arguments. Usage: scene_name scene_path [scene_type] [add_to_build]");
                 Debug.LogError("[VibeUnityCLI] Available scene types: " + string.Join(", ", GetAvailableSceneTypes()));
+                EditorApplication.Exit(1);
                 return;
             }
-            
+
             string sceneName = args[executeMethodIndex + 2];
             string scenePath = args[executeMethodIndex + 3];
             string sceneType = args.Length > executeMethodIndex + 4 ? args[executeMethodIndex + 4] : "DefaultGameObjects";
-            bool addToBuild = args.Length > executeMethodIndex + 5 ? bool.Parse(args[executeMethodIndex + 5]) : false;
-            
-            Debug.Log($"[VibeUnityCLI] Creating scene: {sceneName} at {scenePath} (type: {sceneType})");
-            
+            bool addToBuild = args.Length > executeMethodIndex + 5 && bool.Parse(args[executeMethodIndex + 5]);
+
+            Debug.Log($"[VibeUnityCLI] Creating scene: {sceneName} at {scenePath} (type: {sceneType}, addToBuild: {addToBuild})");
+
             bool success = CreateScene(sceneName, scenePath, sceneType, addToBuild);
-            
             if (success)
             {
                 Debug.Log($"[VibeUnityCLI] ✅ Successfully created scene: {scenePath}/{sceneName}.unity");
+                EditorApplication.Exit(0);
             }
             else
             {
-                Debug.LogError($"[VibeUnityCLI] ❌ Failed to create scene");
-                UnityEditor.EditorApplication.Exit(1);
+                Debug.LogError("[VibeUnityCLI] ❌ Failed to create scene");
+                EditorApplication.Exit(1);
             }
-            */
         }
         
         /// <summary>
-        /// Command line entry point for canvas creation - DISABLED
-        /// Usage: Unity -batchmode -quit -executeMethod VibeUnity.Editor.CLI.AddCanvasFromCommandLine canvas_name [scene_name] render_mode [width] [height] [scale_mode]
+        /// Command line entry point for canvas creation.
+        /// Usage: Unity -batchmode -quit -executeMethod VibeUnity.Editor.CLI.AddCanvasFromCommandLine canvas_name [scene_name] [render_mode] [width] [height] [scale_mode]
         /// </summary>
         public static void AddCanvasFromCommandLine()
         {
-            // CLI commands disabled - functionality commented out
-            Debug.LogWarning("[VibeUnityCLI] CLI commands are disabled. Use internal API methods instead.");
-            return;
-            
-            /*
             string[] args = System.Environment.GetCommandLineArgs();
-            
             int executeMethodIndex = System.Array.FindIndex(args, arg => arg == "-executeMethod");
             if (executeMethodIndex == -1 || executeMethodIndex + 2 >= args.Length)
             {
-                Debug.LogError("[VibeUnityCLI] Invalid arguments. Usage: canvas_name [scene_name] render_mode [width] [height] [scale_mode]");
+                Debug.LogError("[VibeUnityCLI] Invalid arguments. Usage: canvas_name [scene_name] [render_mode] [width] [height] [scale_mode]");
                 Debug.LogError("[VibeUnityCLI] Render modes: ScreenSpaceOverlay, ScreenSpaceCamera, WorldSpace");
+                EditorApplication.Exit(1);
                 return;
             }
-            
+
             string canvasName = args[executeMethodIndex + 2];
             string sceneName = args.Length > executeMethodIndex + 3 ? args[executeMethodIndex + 3] : null;
             string renderMode = args.Length > executeMethodIndex + 4 ? args[executeMethodIndex + 4] : "ScreenSpaceOverlay";
             int width = args.Length > executeMethodIndex + 5 ? int.Parse(args[executeMethodIndex + 5]) : 1920;
             int height = args.Length > executeMethodIndex + 6 ? int.Parse(args[executeMethodIndex + 6]) : 1080;
             string scaleMode = args.Length > executeMethodIndex + 7 ? args[executeMethodIndex + 7] : "ScaleWithScreenSize";
-            
-            // Handle empty string as null for optional parameters
             if (string.IsNullOrEmpty(sceneName)) sceneName = null;
-            
+
             Debug.Log($"[VibeUnityCLI] Adding canvas: {canvasName} in scene {sceneName ?? "current"} ({renderMode}, {width}x{height})");
-            
+
             bool success = AddCanvas(canvasName, sceneName, renderMode, width, height, scaleMode);
-            
             if (success)
             {
                 Debug.Log($"[VibeUnityCLI] ✅ Successfully added canvas: {canvasName}");
-                
-                // Save the scene
-                UnityEditor.SceneManagement.EditorSceneManager.SaveOpenScenes();
+                EditorSceneManager.SaveOpenScenes();
+                EditorApplication.Exit(0);
             }
             else
             {
-                Debug.LogError($"[VibeUnityCLI] ❌ Failed to add canvas");
-                UnityEditor.EditorApplication.Exit(1);
+                Debug.LogError("[VibeUnityCLI] ❌ Failed to add canvas");
+                EditorApplication.Exit(1);
             }
-            */
         }
         
         /// <summary>
-        /// Command line entry point for listing scene types - DISABLED
+        /// Command line entry point for listing scene types.
         /// Usage: Unity -batchmode -quit -executeMethod VibeUnity.Editor.CLI.ListSceneTypesFromCommandLine
         /// </summary>
         public static void ListSceneTypesFromCommandLine()
         {
-            // CLI commands disabled - functionality commented out
-            Debug.LogWarning("[VibeUnityCLI] CLI commands are disabled. Use internal API methods instead.");
-            return;
-            
-            /*
             Debug.Log("[VibeUnityCLI] === Available Scene Types ===");
             ListSceneTypes();
             Debug.Log("[VibeUnityCLI] ===========================");
-            */
+            EditorApplication.Exit(0);
         }
         
         /// <summary>
-        /// Command line entry point for adding UI panels - DISABLED
+        /// Command line entry point for adding UI panels.
         /// Usage: Unity -batchmode -quit -executeMethod VibeUnity.Editor.CLI.AddPanelFromCommandLine panel_name [parent_name] [scene_name] [width] [height] [anchor_preset]
         /// </summary>
         public static void AddPanelFromCommandLine()
         {
-            // CLI commands disabled - functionality commented out
-            Debug.LogWarning("[VibeUnityCLI] CLI commands are disabled. Use internal API methods instead.");
-            return;
+            string[] args = System.Environment.GetCommandLineArgs();
+            int idx = System.Array.FindIndex(args, arg => arg == "-executeMethod");
+            if (idx == -1 || idx + 2 >= args.Length)
+            {
+                Debug.LogError("[VibeUnityCLI] Invalid arguments. Usage: panel_name [parent_name] [scene_name] [width] [height] [anchor_preset]");
+                EditorApplication.Exit(1);
+                return;
+            }
+
+            string panelName  = args[idx + 2];
+            string parentName = args.Length > idx + 3 ? args[idx + 3] : null;
+            string sceneName  = args.Length > idx + 4 ? args[idx + 4] : null;
+            float  width      = args.Length > idx + 5 ? float.Parse(args[idx + 5]) : 200f;
+            float  height     = args.Length > idx + 6 ? float.Parse(args[idx + 6]) : 200f;
+            string anchor     = args.Length > idx + 7 ? args[idx + 7] : "MiddleCenter";
+            if (string.IsNullOrEmpty(parentName)) parentName = null;
+            if (string.IsNullOrEmpty(sceneName))  sceneName  = null;
+
+            Debug.Log($"[VibeUnityCLI] Adding panel: {panelName} (parent: {parentName ?? "auto"}, scene: {sceneName ?? "current"})");
+
+            bool success = VibeUnityUI.AddPanel(panelName, parentName, sceneName, width, height, anchor);
+            if (success)
+            {
+                Debug.Log($"[VibeUnityCLI] ✅ Successfully added panel: {panelName}");
+                EditorSceneManager.SaveOpenScenes();
+                EditorApplication.Exit(0);
+            }
+            else
+            {
+                Debug.LogError("[VibeUnityCLI] ❌ Failed to add panel");
+                EditorApplication.Exit(1);
+            }
         }
         
         /// <summary>
-        /// Command line entry point for adding UI buttons - DISABLED
+        /// Command line entry point for adding UI buttons.
         /// Usage: Unity -batchmode -quit -executeMethod VibeUnity.Editor.CLI.AddButtonFromCommandLine button_name [parent_name] [scene_name] [button_text] [width] [height] [anchor_preset]
         /// </summary>
         public static void AddButtonFromCommandLine()
         {
-            // CLI commands disabled - functionality commented out
-            Debug.LogWarning("[VibeUnityCLI] CLI commands are disabled. Use internal API methods instead.");
-            return;
+            string[] args = System.Environment.GetCommandLineArgs();
+            int idx = System.Array.FindIndex(args, arg => arg == "-executeMethod");
+            if (idx == -1 || idx + 2 >= args.Length)
+            {
+                Debug.LogError("[VibeUnityCLI] Invalid arguments. Usage: button_name [parent_name] [scene_name] [button_text] [width] [height] [anchor_preset]");
+                EditorApplication.Exit(1);
+                return;
+            }
+
+            string buttonName = args[idx + 2];
+            string parentName = args.Length > idx + 3 ? args[idx + 3] : null;
+            string sceneName  = args.Length > idx + 4 ? args[idx + 4] : null;
+            string buttonText = args.Length > idx + 5 ? args[idx + 5] : "Button";
+            float  width      = args.Length > idx + 6 ? float.Parse(args[idx + 6]) : 160f;
+            float  height     = args.Length > idx + 7 ? float.Parse(args[idx + 7]) : 30f;
+            string anchor     = args.Length > idx + 8 ? args[idx + 8] : "MiddleCenter";
+            if (string.IsNullOrEmpty(parentName)) parentName = null;
+            if (string.IsNullOrEmpty(sceneName))  sceneName  = null;
+
+            Debug.Log($"[VibeUnityCLI] Adding button: {buttonName} (parent: {parentName ?? "auto"}, scene: {sceneName ?? "current"}, text: \"{buttonText}\")");
+
+            bool success = VibeUnityUI.AddButton(buttonName, parentName, sceneName, buttonText, width, height, anchor);
+            if (success)
+            {
+                Debug.Log($"[VibeUnityCLI] ✅ Successfully added button: {buttonName}");
+                EditorSceneManager.SaveOpenScenes();
+                EditorApplication.Exit(0);
+            }
+            else
+            {
+                Debug.LogError("[VibeUnityCLI] ❌ Failed to add button");
+                EditorApplication.Exit(1);
+            }
         }
         
         /// <summary>
-        /// Command line entry point for adding UI text - DISABLED
+        /// Command line entry point for adding UI text.
         /// Usage: Unity -batchmode -quit -executeMethod VibeUnity.Editor.CLI.AddTextFromCommandLine text_name [parent_name] [scene_name] [text_content] [font_size] [width] [height] [anchor_preset]
         /// </summary>
         public static void AddTextFromCommandLine()
         {
-            // CLI commands disabled - functionality commented out
-            Debug.LogWarning("[VibeUnityCLI] CLI commands are disabled. Use internal API methods instead.");
-            return;
+            string[] args = System.Environment.GetCommandLineArgs();
+            int idx = System.Array.FindIndex(args, arg => arg == "-executeMethod");
+            if (idx == -1 || idx + 2 >= args.Length)
+            {
+                Debug.LogError("[VibeUnityCLI] Invalid arguments. Usage: text_name [parent_name] [scene_name] [text_content] [font_size] [width] [height] [anchor_preset]");
+                EditorApplication.Exit(1);
+                return;
+            }
+
+            string textName    = args[idx + 2];
+            string parentName  = args.Length > idx + 3 ? args[idx + 3] : null;
+            string sceneName   = args.Length > idx + 4 ? args[idx + 4] : null;
+            string textContent = args.Length > idx + 5 ? args[idx + 5] : "New Text";
+            int    fontSize    = args.Length > idx + 6 ? int.Parse(args[idx + 6]) : 14;
+            float  width       = args.Length > idx + 7 ? float.Parse(args[idx + 7]) : 200f;
+            float  height      = args.Length > idx + 8 ? float.Parse(args[idx + 8]) : 50f;
+            string anchor      = args.Length > idx + 9 ? args[idx + 9] : "MiddleCenter";
+            if (string.IsNullOrEmpty(parentName)) parentName = null;
+            if (string.IsNullOrEmpty(sceneName))  sceneName  = null;
+
+            Debug.Log($"[VibeUnityCLI] Adding text: {textName} (parent: {parentName ?? "auto"}, scene: {sceneName ?? "current"}, content: \"{textContent}\")");
+
+            bool success = VibeUnityUI.AddText(textName, parentName, sceneName, textContent, fontSize, width, height, anchor);
+            if (success)
+            {
+                Debug.Log($"[VibeUnityCLI] ✅ Successfully added text: {textName}");
+                EditorSceneManager.SaveOpenScenes();
+                EditorApplication.Exit(0);
+            }
+            else
+            {
+                Debug.LogError("[VibeUnityCLI] ❌ Failed to add text");
+                EditorApplication.Exit(1);
+            }
         }
         
         /// <summary>
-        /// Command line entry point for batch file execution - DISABLED
+        /// Command line entry point for batch file execution.
         /// Usage: Unity -batchmode -quit -executeMethod VibeUnity.Editor.CLI.ExecuteBatchFromCommandLine json_file_path
         /// </summary>
         public static void ExecuteBatchFromCommandLine()
         {
-            // CLI commands disabled - functionality commented out
-            Debug.LogWarning("[VibeUnityCLI] CLI commands are disabled. Use internal API methods instead.");
-            return;
+            string[] args = System.Environment.GetCommandLineArgs();
+            int idx = System.Array.FindIndex(args, arg => arg == "-executeMethod");
+            if (idx == -1 || idx + 2 >= args.Length)
+            {
+                Debug.LogError("[VibeUnityCLI] Invalid arguments. Usage: json_file_path");
+                EditorApplication.Exit(1);
+                return;
+            }
+
+            string jsonFilePath = args[idx + 2];
+            Debug.Log($"[VibeUnityCLI] Executing batch file: {jsonFilePath}");
+
+            bool success = VibeUnityJSONProcessor.ProcessBatchFileWithLogging(jsonFilePath);
+            if (success)
+            {
+                Debug.Log("[VibeUnityCLI] ✅ Batch file executed successfully");
+                EditorApplication.Exit(0);
+            }
+            else
+            {
+                Debug.LogError("[VibeUnityCLI] ❌ Batch file execution failed");
+                EditorApplication.Exit(1);
+            }
         }
         
         /// <summary>

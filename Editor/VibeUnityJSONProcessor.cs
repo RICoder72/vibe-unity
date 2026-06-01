@@ -65,8 +65,9 @@ namespace VibeUnity.Editor
                 logCapture.AppendLine($"Description: {batchFile.description}");
                 logCapture.AppendLine();
                 
-                // Handle scene configuration if present
-                if (batchFile.scene != null)
+                // Handle scene configuration if present (JsonUtility never returns null for
+                // object fields, so check name is non-empty to detect an actual scene block)
+                if (batchFile.scene != null && !string.IsNullOrEmpty(batchFile.scene.name))
                 {
                     if (!EnsureSceneLoadedWithSceneConfig(batchFile.scene, logCapture))
                     {
@@ -599,62 +600,57 @@ namespace VibeUnity.Editor
         
         private static bool ExecuteAddCubeCommandWithLogging(BatchCommand command, StringBuilder logCapture)
         {
-            Vector3 position = command.position != null && command.position.Length >= 3 ? 
+            Vector3 position = command.position != null && command.position.Length >= 3 ?
                 new Vector3(command.position[0], command.position[1], command.position[2]) : Vector3.zero;
-            Vector3 rotation = command.rotation != null && command.rotation.Length >= 3 ? 
+            Vector3 rotation = command.rotation != null && command.rotation.Length >= 3 ?
                 new Vector3(command.rotation[0], command.rotation[1], command.rotation[2]) : Vector3.zero;
-            Vector3 scale = command.scale != null && command.scale.Length >= 3 ? 
+            Vector3 scale = command.scale != null && command.scale.Length >= 3 ?
                 new Vector3(command.scale[0], command.scale[1], command.scale[2]) : Vector3.one;
-                
-            return VibeUnityPrimitives.CreatePrimitiveWithLogging(command.name, PrimitiveType.Cube, position, rotation, scale, logCapture, "Cube");
+            return VibeUnityPrimitives.CreatePrimitiveWithLogging(command.name, PrimitiveType.Cube, position, rotation, scale, logCapture, "Cube", command.color);
         }
-        
+
         private static bool ExecuteAddSphereCommandWithLogging(BatchCommand command, StringBuilder logCapture)
         {
-            Vector3 position = command.position != null && command.position.Length >= 3 ? 
+            Vector3 position = command.position != null && command.position.Length >= 3 ?
                 new Vector3(command.position[0], command.position[1], command.position[2]) : Vector3.zero;
-            Vector3 rotation = command.rotation != null && command.rotation.Length >= 3 ? 
+            Vector3 rotation = command.rotation != null && command.rotation.Length >= 3 ?
                 new Vector3(command.rotation[0], command.rotation[1], command.rotation[2]) : Vector3.zero;
-            Vector3 scale = command.scale != null && command.scale.Length >= 3 ? 
+            Vector3 scale = command.scale != null && command.scale.Length >= 3 ?
                 new Vector3(command.scale[0], command.scale[1], command.scale[2]) : Vector3.one;
-                
-            return VibeUnityPrimitives.CreatePrimitiveWithLogging(command.name, PrimitiveType.Sphere, position, rotation, scale, logCapture, "Sphere");
+            return VibeUnityPrimitives.CreatePrimitiveWithLogging(command.name, PrimitiveType.Sphere, position, rotation, scale, logCapture, "Sphere", command.color);
         }
-        
+
         private static bool ExecuteAddPlaneCommandWithLogging(BatchCommand command, StringBuilder logCapture)
         {
-            Vector3 position = command.position != null && command.position.Length >= 3 ? 
+            Vector3 position = command.position != null && command.position.Length >= 3 ?
                 new Vector3(command.position[0], command.position[1], command.position[2]) : Vector3.zero;
-            Vector3 rotation = command.rotation != null && command.rotation.Length >= 3 ? 
+            Vector3 rotation = command.rotation != null && command.rotation.Length >= 3 ?
                 new Vector3(command.rotation[0], command.rotation[1], command.rotation[2]) : Vector3.zero;
-            Vector3 scale = command.scale != null && command.scale.Length >= 3 ? 
+            Vector3 scale = command.scale != null && command.scale.Length >= 3 ?
                 new Vector3(command.scale[0], command.scale[1], command.scale[2]) : Vector3.one;
-                
-            return VibeUnityPrimitives.CreatePrimitiveWithLogging(command.name, PrimitiveType.Plane, position, rotation, scale, logCapture, "Plane");
+            return VibeUnityPrimitives.CreatePrimitiveWithLogging(command.name, PrimitiveType.Plane, position, rotation, scale, logCapture, "Plane", command.color);
         }
-        
+
         private static bool ExecuteAddCylinderCommandWithLogging(BatchCommand command, StringBuilder logCapture)
         {
-            Vector3 position = command.position != null && command.position.Length >= 3 ? 
+            Vector3 position = command.position != null && command.position.Length >= 3 ?
                 new Vector3(command.position[0], command.position[1], command.position[2]) : Vector3.zero;
-            Vector3 rotation = command.rotation != null && command.rotation.Length >= 3 ? 
+            Vector3 rotation = command.rotation != null && command.rotation.Length >= 3 ?
                 new Vector3(command.rotation[0], command.rotation[1], command.rotation[2]) : Vector3.zero;
-            Vector3 scale = command.scale != null && command.scale.Length >= 3 ? 
+            Vector3 scale = command.scale != null && command.scale.Length >= 3 ?
                 new Vector3(command.scale[0], command.scale[1], command.scale[2]) : Vector3.one;
-                
-            return VibeUnityPrimitives.CreatePrimitiveWithLogging(command.name, PrimitiveType.Cylinder, position, rotation, scale, logCapture, "Cylinder");
+            return VibeUnityPrimitives.CreatePrimitiveWithLogging(command.name, PrimitiveType.Cylinder, position, rotation, scale, logCapture, "Cylinder", command.color);
         }
-        
+
         private static bool ExecuteAddCapsuleCommandWithLogging(BatchCommand command, StringBuilder logCapture)
         {
-            Vector3 position = command.position != null && command.position.Length >= 3 ? 
+            Vector3 position = command.position != null && command.position.Length >= 3 ?
                 new Vector3(command.position[0], command.position[1], command.position[2]) : Vector3.zero;
-            Vector3 rotation = command.rotation != null && command.rotation.Length >= 3 ? 
+            Vector3 rotation = command.rotation != null && command.rotation.Length >= 3 ?
                 new Vector3(command.rotation[0], command.rotation[1], command.rotation[2]) : Vector3.zero;
-            Vector3 scale = command.scale != null && command.scale.Length >= 3 ? 
+            Vector3 scale = command.scale != null && command.scale.Length >= 3 ?
                 new Vector3(command.scale[0], command.scale[1], command.scale[2]) : Vector3.one;
-                
-            return VibeUnityPrimitives.CreatePrimitiveWithLogging(command.name, PrimitiveType.Capsule, position, rotation, scale, logCapture, "Capsule");
+            return VibeUnityPrimitives.CreatePrimitiveWithLogging(command.name, PrimitiveType.Capsule, position, rotation, scale, logCapture, "Capsule", command.color);
         }
         
         private static bool ExecuteAddComponentCommandWithLogging(BatchCommand command, StringBuilder logCapture)
