@@ -142,9 +142,75 @@ namespace VibeUnity.Editor
             }
             finally
             {
-                // Save the log file
+                // Save the human-readable log...
                 SaveLogFile(jsonFilePath, logCapture, overallSuccess);
+                // ...and a machine-readable result the external agent can poll.
+                SaveResultFile(jsonFilePath, overallSuccess, logCapture);
             }
+        }
+
+        /// <summary>
+        /// Writes a structured, machine-readable result next to the logs so the
+        /// external agent can determine the outcome deterministically instead of
+        /// scraping free-text/emoji log lines.
+        /// </summary>
+        private static void SaveResultFile(string jsonFilePath, bool success, StringBuilder logCapture)
+        {
+            try
+            {
+                string commandsDir = Path.GetDirectoryName(jsonFilePath); // .vibe-unity/commands
+                string resultsDir = Path.Combine(commandsDir, "results");
+                Directory.CreateDirectory(resultsDir);
+
+                // Best-effort extraction of failure lines, ASCII-only (no emoji
+                // literals in source - those are fragile). Only when the batch failed;
+                // a successful batch reports no errors.
+                var errors = new System.Collections.Generic.List<string>();
+                if (!success)
+                {
+                    foreach (var raw in logCapture.ToString().Split('\n'))
+                    {
+                        string t = raw.Trim();
+                        if (t.Length == 0) continue;
+                        string lower = t.ToLowerInvariant();
+                        if (lower.Contains("success")) continue; // skip success lines
+                        if (lower.Contains("error") || lower.Contains("fail") ||
+                            lower.Contains("exception") || lower.Contains("not found") ||
+                            lower.Contains("fatal") || lower.Contains("could not"))
+                        {
+                            errors.Add(StripLeadingNonAscii(t));
+                        }
+                    }
+                }
+
+                var result = new BatchResult
+                {
+                    schemaVersion = 1,
+                    sourceFile = Path.GetFileName(jsonFilePath),
+                    success = success,
+                    status = success ? "SUCCESS" : "FAILURE",
+                    timestampUtc = System.DateTime.UtcNow.ToString("o"),
+                    message = success ? "Batch completed." : "Batch failed; see corresponding .log.",
+                    errors = errors.ToArray()
+                };
+
+                string json = JsonUtility.ToJson(result, true);
+                string baseName = Path.GetFileNameWithoutExtension(jsonFilePath);
+                File.WriteAllText(Path.Combine(resultsDir, baseName + ".result.json"), json);
+                File.WriteAllText(Path.Combine(resultsDir, "latest.result.json"), json);
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning($"[VibeUnity] Failed to write result file: {e.Message}");
+            }
+        }
+
+        /// <summary>Drops leading non-ASCII (e.g. emoji) and whitespace from a line.</summary>
+        private static string StripLeadingNonAscii(string s)
+        {
+            int i = 0;
+            while (i < s.Length && (s[i] > 127 || char.IsWhiteSpace(s[i]))) i++;
+            return s.Substring(i);
         }
         
         /// <summary>
@@ -829,7 +895,23 @@ namespace VibeUnity.Editor
     }
     
     #region Data Structures
-    
+
+    /// <summary>
+    /// Machine-readable result written to .vibe-unity/commands/results/ so an
+    /// external agent can poll a definitive outcome instead of scraping logs.
+    /// </summary>
+    [System.Serializable]
+    public class BatchResult
+    {
+        public int schemaVersion;
+        public string sourceFile;
+        public bool success;
+        public string status;       // "SUCCESS" | "FAILURE"
+        public string timestampUtc;
+        public string message;
+        public string[] errors;
+    }
+
     /// <summary>
     /// Root structure for batch command files
     /// </summary>

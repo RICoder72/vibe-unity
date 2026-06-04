@@ -54,7 +54,10 @@ namespace VibeUnity.Editor
             
             // Set up scene state auto-generation hooks
             InitializeSceneStateHooks();
-            
+
+            // Capture Unity console output for the external agent to read
+            InitializeConsoleCapture();
+
             // Also check for existing files on startup
             CheckForCommandFiles();
         }
@@ -89,6 +92,101 @@ namespace VibeUnity.Editor
         }
         
         
+        #endregion
+
+        #region Console Log Capture
+
+        // Rolling capture of Unity console output to .vibe-unity/logs/console.json so
+        // the external agent can read runtime logs/warnings/errors it otherwise cannot
+        // see. The callback fires on background threads, so we buffer under a lock and
+        // flush on the editor tick (throttled). No Unity API is touched in the callback.
+        private const int CONSOLE_CAPACITY = 500;
+        private static readonly List<VibeConsoleEntry> consoleBuffer = new List<VibeConsoleEntry>();
+        private static readonly object consoleLock = new object();
+        private static bool consoleDirty = false;
+        private static double lastConsoleFlush = 0;
+        private static string ConsoleLogPath =>
+            Path.Combine(Application.dataPath, "..", ".vibe-unity", "logs", "console.json");
+
+        private static void InitializeConsoleCapture()
+        {
+            Application.logMessageReceivedThreaded -= OnConsoleMessage;
+            Application.logMessageReceivedThreaded += OnConsoleMessage;
+            EditorApplication.update -= FlushConsoleIfNeeded;
+            EditorApplication.update += FlushConsoleIfNeeded;
+        }
+
+        private static void OnConsoleMessage(string message, string stackTrace, LogType type)
+        {
+            // DateTime.UtcNow is thread-safe (.NET, not a Unity API), so it is safe here.
+            lock (consoleLock)
+            {
+                consoleBuffer.Add(new VibeConsoleEntry
+                {
+                    type = type.ToString(),
+                    message = message,
+                    stackTrace = stackTrace,
+                    timeUtc = System.DateTime.UtcNow.ToString("o")
+                });
+                if (consoleBuffer.Count > CONSOLE_CAPACITY)
+                    consoleBuffer.RemoveRange(0, consoleBuffer.Count - CONSOLE_CAPACITY);
+                consoleDirty = true;
+            }
+        }
+
+        private static void FlushConsoleIfNeeded()
+        {
+            if (!consoleDirty) return;
+            double now = EditorApplication.timeSinceStartup;
+            if (now - lastConsoleFlush < 1.0) return; // throttle to ~1 Hz
+            lastConsoleFlush = now;
+
+            VibeConsoleEntry[] snapshot;
+            lock (consoleLock)
+            {
+                snapshot = consoleBuffer.ToArray();
+                consoleDirty = false;
+            }
+
+            try
+            {
+                var log = new VibeConsoleLog
+                {
+                    updatedUtc = System.DateTime.UtcNow.ToString("o"),
+                    count = snapshot.Length,
+                    entries = snapshot
+                };
+                Directory.CreateDirectory(Path.GetDirectoryName(ConsoleLogPath));
+                File.WriteAllText(ConsoleLogPath, JsonUtility.ToJson(log, true));
+            }
+            catch (System.Exception e)
+            {
+                // Do not re-log at error level here or we risk a capture feedback loop.
+                Debug.LogWarning($"[VibeUnity] Failed to write console capture: {e.Message}");
+            }
+        }
+
+        [System.Serializable]
+        public class VibeConsoleEntry
+        {
+            public string type;       // Log | Warning | Error | Assert | Exception
+            public string message;
+            public string stackTrace;
+            public string timeUtc;
+        }
+
+        [System.Serializable]
+        public class VibeConsoleLog
+        {
+            public string updatedUtc;
+            public int count;
+            public VibeConsoleEntry[] entries;
+        }
+
+        #endregion
+
+        #region File Watcher System (cont.)
+
         /// <summary>
         /// Checks for existing command files and processes them
         /// </summary>
@@ -131,21 +229,30 @@ namespace VibeUnity.Editor
                     
                     // Use the JSON processor to handle the file
                     bool success = VibeUnityJSONProcessor.ProcessBatchFileWithLogging(filePath);
-                    
-                    // Move processed file to processed directory
-                    string processedDir = Path.Combine(COMMAND_QUEUE_DIR, "processed");
-                    if (!Directory.Exists(processedDir))
+
+                    // Route to processed/ or failed/ based on the actual outcome, so a
+                    // failed command is no longer silently archived as if it succeeded.
+                    string targetSubdir = success ? "processed" : "failed";
+                    string targetDir = Path.Combine(COMMAND_QUEUE_DIR, targetSubdir);
+                    if (!Directory.Exists(targetDir))
                     {
-                        Directory.CreateDirectory(processedDir);
+                        Directory.CreateDirectory(targetDir);
                     }
-                    
+
                     string fileName = Path.GetFileName(filePath);
                     string timestamp = System.DateTime.Now.ToString("yyyyMMdd-HHmmss");
-                    string fileNameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
-                    string processedJsonPath = Path.Combine(processedDir, $"{timestamp}-{fileName}");
-                    
-                    File.Move(filePath, processedJsonPath);
-                    Debug.Log($"[VibeUnity] Moved processed file to: {processedJsonPath}");
+                    string targetJsonPath = Path.Combine(targetDir, $"{timestamp}-{fileName}");
+
+                    File.Move(filePath, targetJsonPath);
+                    if (success)
+                    {
+                        Debug.Log($"[VibeUnity] Processed (SUCCESS): {targetJsonPath}");
+                    }
+                    else
+                    {
+                        Debug.LogError($"[VibeUnity] Command FAILED; moved to failed/: {fileName}. " +
+                                       "See .vibe-unity/commands/results/latest.result.json");
+                    }
                 }
                 catch (System.Exception e)
                 {
@@ -205,10 +312,14 @@ namespace VibeUnity.Editor
             
             // Remove the main thread dispatcher
             EditorApplication.update -= ProcessMainThreadQueue;
-            
+
             // Cleanup compilation tracker
             EditorApplication.update -= MonitorCompilationState;
             CleanupCompilationTracker();
+
+            // Cleanup console capture
+            Application.logMessageReceivedThreaded -= OnConsoleMessage;
+            EditorApplication.update -= FlushConsoleIfNeeded;
         }
         
         #endregion
