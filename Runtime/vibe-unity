@@ -15,24 +15,58 @@
 
 VERSION="1.0.0"
 
-# Check if Unity executable exists
-UNITY_PATH=""
-if command -v /mnt/c/Program\ Files/Unity/Hub/Editor/*/Editor/Unity.exe >/dev/null 2>&1; then
-    UNITY_PATH=$(find /mnt/c/Program\ Files/Unity/Hub/Editor/*/Editor/Unity.exe | head -1)
-elif command -v unity >/dev/null 2>&1; then
+# Locate the newest installed Unity.exe across WSL (/mnt/c) and git-bash (/c) mounts.
+find_unity_exe() {
+    local base candidates=()
+    for base in \
+        "/mnt/c/Program Files/Unity/Hub/Editor" \
+        "/c/Program Files/Unity/Hub/Editor" \
+        "/mnt/c/Program Files/Unity/Editor" \
+        "/c/Program Files/Unity/Editor"; do
+        [[ -d "$base" ]] || continue
+        while IFS= read -r exe; do
+            [[ -n "$exe" ]] && candidates+=("$exe")
+        done < <(find "$base" -maxdepth 2 -name Unity.exe 2>/dev/null)
+    done
+    if [[ ${#candidates[@]} -gt 0 ]]; then
+        # sort -V => highest version last
+        printf '%s\n' "${candidates[@]}" | sort -V | tail -1
+    fi
+}
+
+# Unity executable is only required for batch mode (Unity closed). When Unity is
+# running we use the file-watcher path, so a missing exe is non-fatal here.
+UNITY_PATH="$(find_unity_exe)"
+if [[ -z "$UNITY_PATH" ]] && command -v unity >/dev/null 2>&1; then
     UNITY_PATH="unity"
-else
-    echo "Error: Unity Editor not found. Please ensure Unity is installed and accessible."
-    exit 1
 fi
 
-# Convert WSL path to Windows path for Unity
+# Convert the current dir to a Windows path Unity understands (WSL + git-bash).
 get_project_path() {
-    if [[ $(pwd) == /mnt/c/* ]]; then
-        echo $(pwd | sed 's|/mnt/c|C:|')
-    else
-        echo $(pwd)
+    local p win=""
+    p="$(pwd)"
+    if grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null && command -v wslpath >/dev/null 2>&1; then
+        win="$(wslpath -w "$p" 2>/dev/null)"
+    elif command -v cygpath >/dev/null 2>&1; then
+        win="$(cygpath -w "$p" 2>/dev/null)"
     fi
+    if [[ -n "$win" ]]; then
+        echo "$win"
+    else
+        # Best-effort fallback for /mnt/<drive>/ and /<drive>/ style paths.
+        echo "$p" | sed -E -e 's|^/mnt/([a-zA-Z])/|\1:/|' -e 's|^/([a-zA-Z])/|\1:/|'
+    fi
+}
+
+# Block until a file appears (used to confirm async command results). Args: path, timeout-seconds.
+wait_for_file() {
+    local target="$1" timeout="${2:-20}" waited=0
+    while [[ $waited -lt $timeout ]]; do
+        [[ -f "$target" ]] && return 0
+        sleep 1
+        waited=$((waited + 1))
+    done
+    return 1
 }
 
 # Create JSON batch file for create-scene command and queue it via file watcher
@@ -42,10 +76,10 @@ create_scene_batch_file() {
     local scene_type="${3:-DefaultGameObjects}"
     local add_to_build="${4:-false}"
     
-    # Create .vibe-commands directory if it doesn't exist
-    local command_dir=".vibe-commands"
+    # Drop the command where the Unity file watcher actually looks.
+    local command_dir=".vibe-unity/commands"
     mkdir -p "$command_dir"
-    
+
     # Generate unique filename with timestamp
     local timestamp=$(date +%Y%m%d-%H%M%S-%N)
     local batch_file="$command_dir/create-scene-$timestamp.json"
@@ -67,10 +101,9 @@ create_scene_batch_file() {
 }
 EOF
     
-    echo "📁 Generated batch file: $(basename "$batch_file")"
-    echo "🔍 Unity will automatically process this file via file watcher"
-    echo "💡 Check Unity Console for execution status"
-    
+    echo "Submitted command file: $(basename "$batch_file")" >&2
+    echo "Awaiting Unity file watcher to process it..." >&2
+
     return 0
 }
 
@@ -83,10 +116,10 @@ create_canvas_batch_file() {
     local height="${5:-1080}"
     local scale_mode="${6:-ScaleWithScreenSize}"
     
-    # Create .vibe-commands directory if it doesn't exist
-    local command_dir=".vibe-commands"
+    # Drop the command where the Unity file watcher actually looks.
+    local command_dir=".vibe-unity/commands"
     mkdir -p "$command_dir"
-    
+
     # Generate unique filename with timestamp
     local timestamp=$(date +%Y%m%d-%H%M%S-%N)
     local batch_file="$command_dir/add-canvas-$timestamp.json"
@@ -110,10 +143,9 @@ create_canvas_batch_file() {
 }
 EOF
     
-    echo "📁 Generated batch file: $(basename "$batch_file")"
-    echo "🔍 Unity will automatically process this file via file watcher"
-    echo "💡 Check Unity Console for execution status"
-    
+    echo "Submitted command file: $(basename "$batch_file")" >&2
+    echo "Awaiting Unity file watcher to process it..." >&2
+
     return 0
 }
 
@@ -282,7 +314,7 @@ execute_unity_command() {
             *)
                 echo "💡 Command '$method' not yet supported for automatic file watcher conversion"
                 echo "   Supported commands: create-scene, add-canvas"
-                echo "   Place JSON batch files in .vibe-commands/ directory manually"
+                echo "   Place JSON batch files in .vibe-unity/commands/ directory manually"
                 echo "   Unity will automatically process them via the file watcher"
                 echo ""
                 echo "🚫 Skipping command execution to avoid Unity instance conflicts"
@@ -592,15 +624,25 @@ cmd_create_scene() {
     # Use centralized execute_unity_command function that handles Unity detection
     execute_unity_command "UnityVibe.Editor.CLI.CreateSceneFromCommandLine" "$scene_name" "$scene_path" "$scene_type" "$add_to_build"
     local exit_code=$?
-    
-    if [ $exit_code -eq 0 ]; then
+
+    if [ $exit_code -ne 0 ]; then
         echo ""
-        echo "✅ Scene created successfully: $scene_path/$scene_name.unity"
+        echo "Failed to submit create-scene command"
+        exit 1
+    fi
+
+    # A zero exit only means the command was submitted (file-watcher path) or the
+    # batch process returned; confirm the scene actually exists on disk before
+    # claiming success, rather than optimistically reporting it.
+    local scene_file="$scene_path/$scene_name.unity"
+    if wait_for_file "$scene_file" 20; then
+        echo ""
+        echo "Scene created successfully: $scene_file"
     else
         echo ""
-        echo "❌ Failed to create scene"
-        # Error details are now handled by execute_unity_command
-        exit 1
+        echo "WARNING: command submitted but scene file not found after 20s: $scene_file"
+        echo "Unity may not be processing commands. Check .vibe-unity/commands/logs/latest.log"
+        exit 2
     fi
 }
 
@@ -1201,13 +1243,17 @@ cmd_kill_unity() {
     echo "Killing Unity processes..."
     
     if command -v powershell.exe &> /dev/null; then
-        # Kill Unity Editor processes
-        powershell.exe "Get-Process | Where-Object {\$_.ProcessName -like '*Unity*'} | Stop-Process -Force" 2>/dev/null
-        echo "✅ Unity Editor processes terminated"
-        
-        # Kill Unity Hub processes
-        powershell.exe "Get-Process | Where-Object {\$_.ProcessName -like '*Unity Hub*'} | Stop-Process -Force" 2>/dev/null
-        echo "✅ Unity Hub processes terminated"
+        # Kill the Unity Editor only (exact name) plus its known child processes.
+        # Deliberately NOT a broad '*Unity*' match, which would also kill Unity Hub,
+        # the licensing client, and any unrelated process containing "Unity".
+        powershell.exe "Get-Process -Name 'Unity','UnityShaderCompiler','UnityPackageManager','UnityHelper' -ErrorAction SilentlyContinue | Stop-Process -Force" 2>/dev/null
+        echo "Unity Editor processes terminated"
+
+        # Kill Unity Hub processes only when explicitly forced.
+        if [[ "$force" == "true" ]]; then
+            powershell.exe "Get-Process -Name 'Unity Hub' -ErrorAction SilentlyContinue | Stop-Process -Force" 2>/dev/null
+            echo "Unity Hub processes terminated"
+        fi
         
         # Clean up lock files
         if [[ -f "Temp/UnityLockfile" ]]; then

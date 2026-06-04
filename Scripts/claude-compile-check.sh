@@ -1,24 +1,36 @@
 #!/bin/bash
 
 # claude-compile-check.sh - Unity compilation validator for claude-code integration
-# 
+#
 # Purpose: Validates Unity C# script compilation after claude-code makes changes
 # Returns structured output with error/warning details and precise file locations
 #
 # Exit Codes:
 #   0 = Success (no compilation errors)
 #   1 = Compilation errors found
-#   2 = Compilation timeout or Unity not accessible
-#   3 = Script execution error
+#   2 = Indeterminate: Unity not reachable, log not found, or no compilation
+#       evidence observed within the timeout. NOT treated as success.
+#   3 = Script execution error (bad usage)
 #
-# Usage: ./claude-compile-check.sh [--include-warnings]
+# Usage: ./claude-compile-check.sh [--include-warnings] [--log-path PATH]
+#
+# Environment:
+#   VIBE_UNITY_LOG  Override path to Unity's Editor.log (highest precedence).
 
-UNITY_LOG_PATH="/mnt/c/Users/matth/AppData/Local/Unity/Editor/Editor.log"
+set -uo pipefail
+
 INCLUDE_WARNINGS=false
-SCRIPT_VERSION="1.5.2"
+SCRIPT_VERSION="2.1.0"
 PROJECT_NAME=""
 RETRY_COUNT=0
 MAX_RETRIES=2
+LOG_PATH_OVERRIDE=""
+UNITY_LOG_PATH=""
+
+# Internal sentinel returned by monitor_compilation to request a retry.
+# Kept distinct from the documented exit codes (0/1/2/3) so a genuine script
+# error can never be mistaken for "retry needed".
+readonly RETRY_SENTINEL=10
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -27,18 +39,30 @@ while [[ $# -gt 0 ]]; do
             INCLUDE_WARNINGS=true
             shift
             ;;
+        --log-path)
+            LOG_PATH_OVERRIDE="${2:-}"
+            if [[ -z "$LOG_PATH_OVERRIDE" ]]; then
+                echo "ERROR: --log-path requires a value" >&2
+                exit 3
+            fi
+            shift 2
+            ;;
         --help|-h)
-            echo "Usage: $0 [--include-warnings]"
+            echo "Usage: $0 [--include-warnings] [--log-path PATH]"
             echo "Validates Unity compilation for claude-code integration"
             echo ""
             echo "Options:"
             echo "  --include-warnings  Include warning details in output"
+            echo "  --log-path PATH     Path to Unity Editor.log (overrides auto-detect)"
             echo "  --help, -h          Show this help message"
+            echo ""
+            echo "Environment:"
+            echo "  VIBE_UNITY_LOG      Path to Unity Editor.log (highest precedence)"
             echo ""
             echo "Exit codes:"
             echo "  0 = Success (no errors)"
             echo "  1 = Compilation errors found"
-            echo "  2 = Timeout/Unity not found"
+            echo "  2 = Indeterminate (Unity not reachable / no evidence observed)"
             echo "  3 = Script execution error"
             exit 0
             ;;
@@ -50,96 +74,134 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Portable byte size of a file (replaces GNU-specific `stat -c%s`).
+file_size() {
+    wc -c < "$1" 2>/dev/null | tr -d ' '
+}
+
+# Resolve the Unity Editor.log path across WSL and git-bash, with overrides.
+# Precedence: VIBE_UNITY_LOG > --log-path > auto-detect > legacy fallback.
+resolve_unity_log() {
+    if [[ -n "${VIBE_UNITY_LOG:-}" ]]; then
+        UNITY_LOG_PATH="$VIBE_UNITY_LOG"
+        return
+    fi
+    if [[ -n "$LOG_PATH_OVERRIDE" ]]; then
+        UNITY_LOG_PATH="$LOG_PATH_OVERRIDE"
+        return
+    fi
+
+    local localappdata=""
+    local uname_s
+    uname_s="$(uname -s 2>/dev/null || echo unknown)"
+
+    if grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null; then
+        # WSL: ask Windows for %LOCALAPPDATA%, translate to a /mnt path.
+        local win
+        win="$(cmd.exe /c "echo %LOCALAPPDATA%" 2>/dev/null | tr -d '\r')"
+        if [[ -n "$win" && "$win" != "%LOCALAPPDATA%" ]] && command -v wslpath >/dev/null 2>&1; then
+            localappdata="$(wslpath -u "$win" 2>/dev/null)"
+        fi
+    elif [[ "$uname_s" == MINGW* || "$uname_s" == MSYS* || "$uname_s" == CYGWIN* ]]; then
+        # git-bash / MSYS / Cygwin: %LOCALAPPDATA% is exported as a Windows path.
+        if [[ -n "${LOCALAPPDATA:-}" ]]; then
+            if command -v cygpath >/dev/null 2>&1; then
+                localappdata="$(cygpath -u "$LOCALAPPDATA" 2>/dev/null)"
+            else
+                # Best-effort: C:\Users\x -> /c/Users/x
+                localappdata="$(echo "$LOCALAPPDATA" | sed -e 's|\\|/|g' -e 's|^\([A-Za-z]\):|/\L\1|')"
+            fi
+        fi
+    fi
+
+    if [[ -n "$localappdata" ]]; then
+        UNITY_LOG_PATH="$localappdata/Unity/Editor/Editor.log"
+    else
+        # Last-resort legacy fallback; warn loudly since this is user-specific.
+        UNITY_LOG_PATH="/mnt/c/Users/$(whoami)/AppData/Local/Unity/Editor/Editor.log"
+        echo "WARNING: could not auto-detect Unity log path; falling back to $UNITY_LOG_PATH" >&2
+        echo "         Set VIBE_UNITY_LOG or pass --log-path if this is wrong." >&2
+    fi
+}
+
 # Function to output structured results
 output_result() {
     local status="$1"
     local error_count="$2"
     local warning_count="$3"
     local details="$4"
-    
+
     echo "STATUS: $status"
     echo "ERRORS: $error_count"
     echo "WARNINGS: $warning_count"
     if [[ -n "$details" ]]; then
         echo "DETAILS:"
-        echo "$details"
+        # Use %b so the accumulated literal "\n" separators render as newlines.
+        printf '%b\n' "$details"
     fi
     echo "SCRIPT_VERSION: $SCRIPT_VERSION"
 }
 
 # Function to detect project name from current directory
 detect_project_name() {
-    local current_dir=$(pwd)
-    PROJECT_NAME=$(basename "$current_dir")
+    PROJECT_NAME="$(basename "$(pwd)")"
     echo "Detected project name: $PROJECT_NAME" >&2
 }
 
 # Function to focus Unity window for recompilation
 focus_unity() {
     local project_pattern="$PROJECT_NAME"
-    
-    # If project name detection failed, try to find any Unity window
     if [[ -z "$project_pattern" ]]; then
         project_pattern="Unity"
     fi
-    
-    powershell.exe -Command "
+
+    # Note: stderr is intentionally preserved so "No Unity process found" and the
+    # window-mismatch warning reach the caller's log instead of being discarded.
+    powershell.exe -NoProfile -Command "
     \$unityProcesses = Get-Process -Name 'Unity' -ErrorAction SilentlyContinue | Where-Object { \$_.MainWindowTitle -ne '' };
     \$targetUnity = \$null;
-    
-    # First try to find Unity window with project name
     if ('$project_pattern' -ne 'Unity') {
         \$targetUnity = \$unityProcesses | Where-Object { \$_.MainWindowTitle -like '*$project_pattern*' } | Select-Object -First 1;
     }
-    
-    # If not found, get the first Unity window
     if (-not \$targetUnity -and \$unityProcesses) {
         \$targetUnity = \$unityProcesses | Select-Object -First 1;
-        Write-Host \"Warning: Could not find Unity window for project '$project_pattern', using first Unity window: \$((\$targetUnity).MainWindowTitle)\" -ForegroundColor Yellow;
+        Write-Host \"Warning: Could not find Unity window for project '$project_pattern', using first Unity window: \$((\$targetUnity).MainWindowTitle)\";
     }
-    
     if (\$targetUnity) {
         Add-Type -AssemblyName Microsoft.VisualBasic;
         [Microsoft.VisualBasic.Interaction]::AppActivate(\$targetUnity.Id);
         Write-Host \"Unity focused for compilation check: \$((\$targetUnity).MainWindowTitle)\";
+        exit 0
     } else {
-        Write-Host 'No Unity process found' -ForegroundColor Red;
+        Write-Host 'No Unity process found';
         exit 1
-    }" 2>/dev/null
-    
+    }"
     return $?
 }
 
-# Function to focus back to WSL terminal
+# Function to focus back to the calling terminal (best-effort; non-fatal).
 focus_wsl() {
-    powershell.exe -Command "
-    \$wsl = Get-Process -Name 'WindowsTerminal' -ErrorAction SilentlyContinue | Select-Object -First 1;
-    if (\$wsl) {
-        Add-Type -AssemblyName Microsoft.VisualBasic;
-        [Microsoft.VisualBasic.Interaction]::AppActivate(\$wsl.Id);
-    } else {
-        \$cmd = Get-Process -Name 'cmd' -ErrorAction SilentlyContinue | Select-Object -First 1;
-        if (\$cmd) {
+    powershell.exe -NoProfile -Command "
+    \$names = @('WindowsTerminal','cmd','Code','alacritty','ConEmu64','ConEmu');
+    foreach (\$n in \$names) {
+        \$p = Get-Process -Name \$n -ErrorAction SilentlyContinue | Select-Object -First 1;
+        if (\$p) {
             Add-Type -AssemblyName Microsoft.VisualBasic;
-            [Microsoft.VisualBasic.Interaction]::AppActivate(\$cmd.Id);
+            [Microsoft.VisualBasic.Interaction]::AppActivate(\$p.Id);
+            break
         }
-    }" 2>/dev/null
+    }" 2>/dev/null || true
 }
 
 # Function to check Unity compilation status via status file
 check_unity_compilation_status() {
     local status_file=".vibe-unity/status/compilation.json"
-    
-    # Check if status file exists
     if [[ ! -f "$status_file" ]]; then
         echo "NOT_FOUND"
         return
     fi
-    
-    # Try to read the file (will fail if locked)
     local file_content=""
     if file_content=$(cat "$status_file" 2>/dev/null); then
-        # File is unlocked, parse status
         if echo "$file_content" | grep -q '"status":"compiling"'; then
             echo "COMPILING"
         elif echo "$file_content" | grep -q '"status":"complete"'; then
@@ -148,7 +210,6 @@ check_unity_compilation_status() {
             echo "UNKNOWN"
         fi
     else
-        # File is locked (compilation in progress)
         echo "LOCKED"
     fi
 }
@@ -160,49 +221,35 @@ parse_compilation_results() {
     local warnings=""
     local error_count=0
     local warning_count=0
-    
-    # Parse compilation errors
+
     while IFS= read -r line; do
         if [[ "$line" =~ ^(.+)\(([0-9]+),([0-9]+)\):\ error\ (.+):\ (.+)$ ]]; then
-            # C# compilation error format: File(line,col): error CS####: Message
             local file="${BASH_REMATCH[1]}"
             local line_num="${BASH_REMATCH[2]}"
             local error_msg="${BASH_REMATCH[5]}"
-            
-            # Clean up file path for better readability
             file=$(echo "$file" | sed 's|.*[/\\]Packages[/\\]|./Packages/|' | sed 's|.*[/\\]Assets[/\\]|./Assets/|')
-            
             errors="${errors}  [$file:$line_num] $error_msg\n"
-            ((error_count++))
+            ((++error_count))
         elif [[ "$line" =~ error\ CS[0-9]+: ]]; then
-            # Generic error pattern
             local error_msg=$(echo "$line" | sed 's/.*error CS[0-9]*: //')
             errors="${errors}  [Unknown] $error_msg\n"
-            ((error_count++))
+            ((++error_count))
         fi
     done <<< "$log_content"
-    
-    # Always parse warnings to get accurate count
+
     while IFS= read -r line; do
-        # Pattern 1: Standard C# warning format with file location (Windows or Unix paths)
-        # Example: Assets\Scripts\Test.cs(10,5): warning CS0168: The variable 'test' is declared but never used
         if [[ "$line" =~ ^(.+)\(([0-9]+),([0-9]+)\):\ warning\ (CS[0-9]+):\ (.+)$ ]]; then
-            ((warning_count++))
+            ((++warning_count))
             if [[ "$INCLUDE_WARNINGS" == "true" ]]; then
                 local file="${BASH_REMATCH[1]}"
                 local line_num="${BASH_REMATCH[2]}"
-                local col_num="${BASH_REMATCH[3]}"
                 local warning_code="${BASH_REMATCH[4]}"
                 local warning_msg="${BASH_REMATCH[5]}"
-                
-                # Clean up file path (handle both Windows backslashes and Unix forward slashes)
                 file=$(echo "$file" | sed 's|\\|/|g' | sed 's|.*[/]Packages[/]|./Packages/|' | sed 's|.*[/]Assets[/]|./Assets/|')
-                
                 warnings="${warnings}  [$file:$line_num] WARNING $warning_code: $warning_msg\n"
             fi
-        # Pattern 2: Generic warning pattern
         elif [[ "$line" =~ warning\ (CS[0-9]+):\ (.+)$ ]]; then
-            ((warning_count++))
+            ((++warning_count))
             if [[ "$INCLUDE_WARNINGS" == "true" ]]; then
                 local warning_code="${BASH_REMATCH[1]}"
                 local warning_msg="${BASH_REMATCH[2]}"
@@ -210,24 +257,17 @@ parse_compilation_results() {
             fi
         fi
     done <<< "$log_content"
-    
-    # Combine results
+
     local details=""
-    if [[ -n "$errors" ]]; then
-        details="${details}${errors}"
-    fi
-    if [[ -n "$warnings" ]]; then
-        details="${details}${warnings}"
-    fi
-    
+    [[ -n "$errors" ]] && details="${details}${errors}"
+    [[ -n "$warnings" ]] && details="${details}${warnings}"
+
     echo "$error_count|$warning_count|$details"
 }
 
 # Function to check if compilation logs exist
 check_compilation_logs() {
     local log_content="$1"
-    
-    # Check for various compilation indicators
     if echo "$log_content" | grep -q "CompileScripts\|Reloading assemblies\|Compilation\|Nothing to compile"; then
         return 0
     fi
@@ -236,76 +276,63 @@ check_compilation_logs() {
 
 # Function to monitor Unity compilation with timeout
 monitor_compilation() {
-    local timeout=45  # Increased timeout for compilation checking
+    local timeout=45
     local elapsed=0
-    
-    # Verify Unity log exists
+
     if [[ ! -f "$UNITY_LOG_PATH" ]]; then
         output_result "ERROR" "0" "0" "Unity Editor log not found at: $UNITY_LOG_PATH"
         return 2
     fi
-    
-    # Get initial log size to track new entries
-    local initial_size=$(stat -c%s "$UNITY_LOG_PATH")
+
+    local initial_size
+    initial_size=$(file_size "$UNITY_LOG_PATH")
+    local current_size="$initial_size"
     local compilation_started=false
-    local nothing_to_compile=false
     local complete_checks=0
-    
+
     while [[ $elapsed -lt $timeout ]]; do
-        local current_size=$(stat -c%s "$UNITY_LOG_PATH")
-        
-        # Check Unity compilation status via status file
-        local unity_status=$(check_unity_compilation_status)
-        
-        # If Unity is compiling (locked file or compiling status), track compilation activity
-        if [[ "$unity_status" == "LOCKED" ]] || [[ "$unity_status" == "COMPILING" ]]; then
+        current_size=$(file_size "$UNITY_LOG_PATH")
+        local unity_status
+        unity_status=$(check_unity_compilation_status)
+
+        if [[ "$unity_status" == "LOCKED" || "$unity_status" == "COMPILING" ]]; then
             compilation_started=true
             echo "Unity compilation detected via status file - compilation in progress..." >&2
         elif [[ "$unity_status" == "COMPLETE" ]]; then
-            # If Unity is already complete and no compilation was started, 
-            # and no new log entries, then nothing to compile
-            if [[ "$compilation_started" == "false" ]] && [[ $current_size -eq $initial_size ]]; then
-                echo "Unity compilation is already complete, no new compilation detected" >&2
+            if [[ "$compilation_started" == "false" && $current_size -eq $initial_size ]]; then
+                echo "Unity status complete and no new log activity; nothing to compile" >&2
                 output_result "SUCCESS" "0" "0" "No compilation required - Unity is up to date"
                 return 0
             fi
-            # Count consecutive "complete" status checks to prevent infinite loops
             if [[ "$compilation_started" == "true" ]]; then
-                ((complete_checks++))
+                ((++complete_checks))
                 if [[ $complete_checks -ge 3 ]]; then
                     echo "Unity shows complete status - treating as success" >&2
                     output_result "SUCCESS" "0" "0" "Compilation completed successfully"
                     return 0
                 fi
             fi
-            echo "Unity compilation completed via status file" >&2
         fi
-        
+
         if [[ $current_size -gt $initial_size ]]; then
-            # Get new log entries since monitoring started
-            local new_entries=$(tail -c +$((initial_size + 1)) "$UNITY_LOG_PATH")
-            
-            # Check for "nothing to compile" scenario
+            local new_entries
+            new_entries=$(tail -c +$((initial_size + 1)) "$UNITY_LOG_PATH")
+
             if echo "$new_entries" | grep -q "Nothing to compile\|All compiler tasks finished\|Compilation succeeded"; then
-                nothing_to_compile=true
                 output_result "SUCCESS" "0" "0" "No compilation needed - all scripts up to date"
                 return 0
             fi
-            
-            # Check for compilation start indicators
+
             if [[ "$compilation_started" == "false" ]] && echo "$new_entries" | grep -q "Reloading assemblies\|CompileScripts\|Start importing"; then
                 compilation_started=true
             fi
-            
-            # Check for compilation completion indicators
+
             if echo "$new_entries" | grep -q "Reloading assemblies after forced synchronous recompile\|Finished compiling graph\|CompileScripts:.*ms\|Hotreload:.*ms\|PostProcessAllAssets:.*ms"; then
-                
-                # Parse the compilation results
-                local parse_result=$(parse_compilation_results "$new_entries")
-                local error_count=$(echo "$parse_result" | cut -d'|' -f1)
-                local warning_count=$(echo "$parse_result" | cut -d'|' -f2)
-                local details=$(echo "$parse_result" | cut -d'|' -f3-)
-                
+                local parse_result error_count warning_count details
+                parse_result=$(parse_compilation_results "$new_entries")
+                error_count=$(echo "$parse_result" | cut -d'|' -f1)
+                warning_count=$(echo "$parse_result" | cut -d'|' -f2)
+                details=$(echo "$parse_result" | cut -d'|' -f3-)
                 if [[ $error_count -eq 0 ]]; then
                     output_result "SUCCESS" "$error_count" "$warning_count" "$details"
                     return 0
@@ -314,58 +341,52 @@ monitor_compilation() {
                     return 1
                 fi
             fi
-            
-            # Check for compilation errors in real-time
+
             if echo "$new_entries" | grep -q "error CS[0-9]*:"; then
-                # Found errors, but wait a bit more to get complete error list
                 sleep 2
-                
-                # Get final log state
-                local final_entries=$(tail -c +$((initial_size + 1)) "$UNITY_LOG_PATH")
-                local parse_result=$(parse_compilation_results "$final_entries")
-                local error_count=$(echo "$parse_result" | cut -d'|' -f1)
-                local warning_count=$(echo "$parse_result" | cut -d'|' -f2)
-                local details=$(echo "$parse_result" | cut -d'|' -f3-)
-                
+                local final_entries parse_result error_count warning_count details
+                final_entries=$(tail -c +$((initial_size + 1)) "$UNITY_LOG_PATH")
+                parse_result=$(parse_compilation_results "$final_entries")
+                error_count=$(echo "$parse_result" | cut -d'|' -f1)
+                warning_count=$(echo "$parse_result" | cut -d'|' -f2)
+                details=$(echo "$parse_result" | cut -d'|' -f3-)
                 output_result "ERRORS" "$error_count" "$warning_count" "$details"
                 return 1
             fi
         fi
-        
+
         sleep 1
-        ((elapsed++))
-        
-        # If Unity is still compiling but we're approaching timeout, give more time
-        if [[ ("$unity_status" == "LOCKED" || "$unity_status" == "COMPILING") ]] && [[ $elapsed -gt $((timeout - 10)) ]]; then
+        ((++elapsed))
+
+        if [[ "$unity_status" == "LOCKED" || "$unity_status" == "COMPILING" ]] && [[ $elapsed -gt $((timeout - 10)) ]]; then
             echo "Unity still compiling near timeout, extending wait..." >&2
-            timeout=$((timeout + 15))  # Give 15 more seconds
+            timeout=$((timeout + 15))
         fi
     done
-    
-    # Timeout reached - check Unity one more time and logs
-    local final_unity_status=$(check_unity_compilation_status)
-    local final_entries=""
-    if [[ $current_size -gt $initial_size ]]; then
+
+    # Timeout reached - re-read state explicitly (do not rely on loop-local size).
+    local final_unity_status final_size final_entries=""
+    final_unity_status=$(check_unity_compilation_status)
+    final_size=$(file_size "$UNITY_LOG_PATH")
+    if [[ ${final_size:-0} -gt ${initial_size:-0} ]]; then
         final_entries=$(tail -c +$((initial_size + 1)) "$UNITY_LOG_PATH")
     fi
-    
-    # If Unity is still compiling, this might be a longer compilation
-    if [[ "$final_unity_status" == "LOCKED" ]] || [[ "$final_unity_status" == "COMPILING" ]]; then
+
+    if [[ "$final_unity_status" == "LOCKED" || "$final_unity_status" == "COMPILING" ]]; then
         echo "Unity still compiling at timeout (status: $final_unity_status)" >&2
         if [[ $RETRY_COUNT -lt $MAX_RETRIES ]]; then
-            ((RETRY_COUNT++))
-            echo "Unity still compiling. Retrying (attempt $((RETRY_COUNT + 1))/$((MAX_RETRIES + 1)))..." >&2
-            return 3  # Signal retry needed
+            ((++RETRY_COUNT))
+            echo "Retrying (attempt $((RETRY_COUNT + 1))/$((MAX_RETRIES + 1)))..." >&2
+            return $RETRY_SENTINEL
         fi
     fi
-    
-    # If we have compilation logs, analyze them
+
     if check_compilation_logs "$final_entries"; then
-        local parse_result=$(parse_compilation_results "$final_entries")
-        local error_count=$(echo "$parse_result" | cut -d'|' -f1)
-        local warning_count=$(echo "$parse_result" | cut -d'|' -f2)
-        local details=$(echo "$parse_result" | cut -d'|' -f3-)
-        
+        local parse_result error_count warning_count details
+        parse_result=$(parse_compilation_results "$final_entries")
+        error_count=$(echo "$parse_result" | cut -d'|' -f1)
+        warning_count=$(echo "$parse_result" | cut -d'|' -f2)
+        details=$(echo "$parse_result" | cut -d'|' -f3-)
         if [[ $error_count -eq 0 ]]; then
             output_result "SUCCESS" "$error_count" "$warning_count" "Compilation completed (found in logs after timeout)"
             return 0
@@ -374,49 +395,49 @@ monitor_compilation() {
             return 1
         fi
     fi
-    
-    # No compilation logs found
+
     if [[ $RETRY_COUNT -lt $MAX_RETRIES ]]; then
-        ((RETRY_COUNT++))
-        echo "No compilation logs found. Retrying (attempt $((RETRY_COUNT + 1))/$((MAX_RETRIES + 1)))..." >&2
-        return 3  # Signal retry needed
+        ((++RETRY_COUNT))
+        echo "No compilation evidence yet. Retrying (attempt $((RETRY_COUNT + 1))/$((MAX_RETRIES + 1)))..." >&2
+        return $RETRY_SENTINEL
     else
-        # Assume nothing to compile after retries
-        output_result "SUCCESS" "0" "0" "No compilation activity detected - assuming all scripts are up to date"
-        return 0
+        # IMPORTANT: never report SUCCESS when we observed no compilation evidence.
+        # The whole point of this tool is to *confirm* compilation; "couldn't tell"
+        # is reported as indeterminate (exit 2), not a clean pass.
+        output_result "UNKNOWN" "0" "0" "No compilation evidence observed. Unity may not be running, auto-refresh may be disabled, or the trigger failed. Treat as UNVERIFIED."
+        return 2
     fi
 }
 
 # Main execution function
 main() {
-    # Step 0: Detect project name
     detect_project_name
-    
-    local result=3  # Start with retry needed
-    
-    while [[ $result -eq 3 ]] && [[ $RETRY_COUNT -le $MAX_RETRIES ]]; do
-        # Step 1: Focus Unity to trigger compilation
+    resolve_unity_log
+    echo "Using Unity log: $UNITY_LOG_PATH" >&2
+
+    local result=$RETRY_SENTINEL
+
+    while [[ $result -eq $RETRY_SENTINEL ]] && [[ $RETRY_COUNT -le $MAX_RETRIES ]]; do
         if ! focus_unity; then
             output_result "ERROR" "0" "0" "Failed to focus Unity window. Ensure Unity is running."
             return 2
         fi
-        
-        # Brief pause to allow Unity to process the focus
         sleep 2
-        
-        # Step 2: Focus back to WSL terminal
         focus_wsl
         sleep 1
-        
-        # Step 3: Monitor compilation and return results
         monitor_compilation
         result=$?
-        
-        if [[ $result -eq 3 ]] && [[ $RETRY_COUNT -lt $MAX_RETRIES ]]; then
-            sleep 2  # Wait before retry
+        if [[ $result -eq $RETRY_SENTINEL ]] && [[ $RETRY_COUNT -lt $MAX_RETRIES ]]; then
+            sleep 2
         fi
     done
-    
+
+    # If we exhausted retries still holding the sentinel, that's indeterminate.
+    if [[ $result -eq $RETRY_SENTINEL ]]; then
+        output_result "UNKNOWN" "0" "0" "Compilation could not be verified after retries. Treat as UNVERIFIED."
+        return 2
+    fi
+
     return $result
 }
 
