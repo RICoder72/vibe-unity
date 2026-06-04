@@ -40,22 +40,24 @@ namespace VibeUnity.Editor
         /// <summary>
         /// Save settings to file
         /// </summary>
-        public static void SaveSettings(VibeUnitySettingsData settings)
+        public static bool SaveSettings(VibeUnitySettingsData settings)
         {
             try
             {
                 string json = JsonUtility.ToJson(settings, true);
                 File.WriteAllText(settingsPath, json);
                 cachedSettings = settings;
-                
+
                 Debug.Log($"[VibeUnity] Settings saved to: {settingsPath}");
-                
+
                 // Update menu items with new shortcuts
                 VibeUnityCompilationController.UpdateShortcuts(settings.shortcuts);
+                return true;
             }
             catch (Exception e)
             {
                 Debug.LogError($"[VibeUnity] Failed to save settings: {e.Message}");
+                return false;
             }
         }
         
@@ -70,7 +72,17 @@ namespace VibeUnity.Editor
                 {
                     string json = File.ReadAllText(settingsPath);
                     cachedSettings = JsonUtility.FromJson<VibeUnitySettingsData>(json);
-                    
+
+                    // Heal a corrupt/empty file rather than NRE'ing on every load and
+                    // leaving the bad file in place.
+                    if (cachedSettings == null)
+                    {
+                        Debug.LogWarning("[VibeUnity] Settings file was unreadable; regenerating defaults.");
+                        cachedSettings = CreateDefaultSettings();
+                        SaveSettings(cachedSettings);
+                        return;
+                    }
+
                     // Validate and fill in any missing shortcuts with defaults
                     if (cachedSettings.shortcuts == null)
                     {

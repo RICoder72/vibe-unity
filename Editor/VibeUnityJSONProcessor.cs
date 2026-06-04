@@ -678,13 +678,20 @@ namespace VibeUnity.Editor
                     return false;
                 }
                 
-                // Set component parameters if provided
+                // Set component parameters if provided. Surface failures instead of
+                // discarding the result and reporting unconditional success.
                 if (command.parameters != null && command.parameters.Length > 0)
                 {
-                    VibeUnityGameObjects.SetComponentParameters(addedComponent, command.parameters, logCapture);
+                    bool paramsOk = VibeUnityGameObjects.SetComponentParameters(addedComponent, command.parameters, logCapture);
+                    if (!paramsOk)
+                    {
+                        logCapture.AppendLine($"FAIL: one or more parameters on '{componentTypeName}' could not be applied (see above)");
+                        VibeUnityScenes.MarkActiveSceneDirty();
+                        return false;
+                    }
                 }
-                
-                logCapture.AppendLine($"✅ Component '{componentTypeName}' added successfully to '{targetName}'");
+
+                logCapture.AppendLine($"SUCCESS: Component '{componentTypeName}' added to '{targetName}'");
                 
                 // Mark scene as dirty to ensure changes are saved
                 VibeUnityScenes.MarkActiveSceneDirty();
