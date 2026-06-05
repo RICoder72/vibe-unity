@@ -64,6 +64,14 @@ namespace VibeUnity.Editor
                 logCapture.AppendLine($"✅ Batch file loaded: {batchFile.commands.Length} commands");
                 logCapture.AppendLine($"Description: {batchFile.description}");
                 logCapture.AppendLine();
+
+                // Detect editor-control-only batches (e.g. recompile) so we skip the
+                // scene save/export tail for them.
+                bool onlyControlCommands = true;
+                foreach (var c in batchFile.commands)
+                {
+                    if (!IsControlCommand(c.action)) { onlyControlCommands = false; break; }
+                }
                 
                 // Handle scene configuration if present (JsonUtility never returns null for
                 // object fields, so check name is non-empty to detect an actual scene block)
@@ -97,37 +105,44 @@ namespace VibeUnity.Editor
                     logCapture.AppendLine();
                 }
                 
-                // Save all scenes after batch execution
-                logCapture.AppendLine("Saving scenes and refreshing asset database...");
-                // Force save the active scene specifically
-                VibeUnityScenes.ForceSaveActiveScene();
-                // Also save any other open scenes
-                EditorSceneManager.SaveOpenScenes();
-                AssetDatabase.Refresh();
-                logCapture.AppendLine("✅ Scenes saved and asset database refreshed");
-                
-                // Generate scene state artifact after batch processing
-                logCapture.AppendLine("Generating scene state artifact...");
-                try
+                if (!onlyControlCommands)
                 {
-                    if (VibeUnitySceneExporter.ExportActiveSceneState())
+                    // Save all scenes after batch execution
+                    logCapture.AppendLine("Saving scenes and refreshing asset database...");
+                    // Force save the active scene specifically
+                    VibeUnityScenes.ForceSaveActiveScene();
+                    // Also save any other open scenes
+                    EditorSceneManager.SaveOpenScenes();
+                    AssetDatabase.Refresh();
+                    logCapture.AppendLine("✅ Scenes saved and asset database refreshed");
+
+                    // Generate scene state artifact after batch processing
+                    logCapture.AppendLine("Generating scene state artifact...");
+                    try
                     {
-                        logCapture.AppendLine("✅ Scene state artifact generated successfully");
-                        logCapture.AppendLine("   └─ State file saved alongside scene file");
-                        logCapture.AppendLine("   └─ Coverage analysis report generated");
+                        if (VibeUnitySceneExporter.ExportActiveSceneState())
+                        {
+                            logCapture.AppendLine("✅ Scene state artifact generated successfully");
+                            logCapture.AppendLine("   └─ State file saved alongside scene file");
+                            logCapture.AppendLine("   └─ Coverage analysis report generated");
+                        }
+                        else
+                        {
+                            logCapture.AppendLine("⚠️ Warning: Scene state artifact generation failed");
+                            logCapture.AppendLine("   └─ Check console for export error details");
+                        }
                     }
-                    else
+                    catch (System.Exception e)
                     {
-                        logCapture.AppendLine("⚠️ Warning: Scene state artifact generation failed");
-                        logCapture.AppendLine("   └─ Check console for export error details");
+                        logCapture.AppendLine($"⚠️ Warning: Exception during scene state export: {e.Message}");
+                        logCapture.AppendLine("   └─ Batch processing completed successfully despite export issue");
                     }
                 }
-                catch (System.Exception e)
+                else
                 {
-                    logCapture.AppendLine($"⚠️ Warning: Exception during scene state export: {e.Message}");
-                    logCapture.AppendLine("   └─ Batch processing completed successfully despite export issue");
+                    logCapture.AppendLine("Control-only batch (recompile/refresh): skipping scene save/export.");
                 }
-                
+
                 overallSuccess = true;
                 return true;
             }
@@ -346,9 +361,43 @@ namespace VibeUnity.Editor
                     return ExecuteAddComponentCommandWithLogging(command, logCapture);
                 case "add-gameobject":
                     return ExecuteAddGameObjectCommandWithLogging(command, logCapture);
+                case "recompile":
+                case "refresh":
+                    return ExecuteRecompileCommandWithLogging(command, logCapture);
                 default:
-                    logCapture.AppendLine($"❌ ERROR: Unknown batch command: {command.action}");
+                    logCapture.AppendLine($"ERROR: Unknown batch command: {command.action}");
                     return false;
+            }
+        }
+
+        /// <summary>
+        /// Whether an action only controls the editor (no scene mutation), so the
+        /// scene save/export tail can be skipped.
+        /// </summary>
+        private static bool IsControlCommand(string action)
+        {
+            string a = (action ?? "").ToLower();
+            return a == "recompile" || a == "refresh";
+        }
+
+        /// <summary>
+        /// Requests an asset refresh + script recompilation. This is the deterministic,
+        /// focus-free alternative to stealing the Unity window with AppActivate.
+        /// </summary>
+        private static bool ExecuteRecompileCommandWithLogging(BatchCommand command, StringBuilder logCapture)
+        {
+            try
+            {
+                logCapture.AppendLine("Executing recompile command...");
+                AssetDatabase.Refresh();
+                UnityEditor.Compilation.CompilationPipeline.RequestScriptCompilation();
+                logCapture.AppendLine("SUCCESS: requested AssetDatabase.Refresh + script compilation");
+                return true;
+            }
+            catch (System.Exception e)
+            {
+                logCapture.AppendLine($"FAIL: recompile request failed: {e.Message}");
+                return false;
             }
         }
         

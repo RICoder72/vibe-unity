@@ -409,33 +409,66 @@ monitor_compilation() {
     fi
 }
 
-# Main execution function
-main() {
-    detect_project_name
-    resolve_unity_log
-    echo "Using Unity log: $UNITY_LOG_PATH" >&2
+# Deterministic, focus-free compile trigger: drop a recompile command for the
+# Unity file-watcher to process (it calls CompilationPipeline.RequestScriptCompilation).
+# Preferred over stealing the Unity window with AppActivate. Returns non-zero only
+# if the command queue directory is absent (caller can then fall back to focus).
+trigger_recompile_via_command() {
+    local cmd_dir=".vibe-unity/commands"
+    [[ -d "$cmd_dir" ]] || mkdir -p "$cmd_dir" 2>/dev/null || return 1
+    local f="$cmd_dir/recompile-$(date +%s%N).json"
+    printf '{"commands":[{"action":"recompile"}]}\n' > "$f" 2>/dev/null || return 1
+    echo "Requested recompile via command file: $(basename "$f")" >&2
+    return 0
+}
 
+# Run one trigger+monitor cycle (with internal retries). mode = command | focus.
+run_trigger_and_monitor() {
+    local mode="$1"
     local result=$RETRY_SENTINEL
-
     while [[ $result -eq $RETRY_SENTINEL ]] && [[ $RETRY_COUNT -le $MAX_RETRIES ]]; do
-        if ! focus_unity; then
-            output_result "ERROR" "0" "0" "Failed to focus Unity window. Ensure Unity is running."
-            return 2
+        if [[ "$mode" == "command" ]]; then
+            trigger_recompile_via_command || return 2
+            sleep 1
+        else
+            if ! focus_unity; then
+                output_result "ERROR" "0" "0" "Failed to focus Unity window. Ensure Unity is running."
+                return 2
+            fi
+            sleep 2
+            focus_wsl
+            sleep 1
         fi
-        sleep 2
-        focus_wsl
-        sleep 1
         monitor_compilation
         result=$?
         if [[ $result -eq $RETRY_SENTINEL ]] && [[ $RETRY_COUNT -lt $MAX_RETRIES ]]; then
             sleep 2
         fi
     done
-
-    # If we exhausted retries still holding the sentinel, that's indeterminate.
     if [[ $result -eq $RETRY_SENTINEL ]]; then
         output_result "UNKNOWN" "0" "0" "Compilation could not be verified after retries. Treat as UNVERIFIED."
         return 2
+    fi
+    return $result
+}
+
+# Main execution function
+main() {
+    detect_project_name
+    resolve_unity_log
+    echo "Using Unity log: $UNITY_LOG_PATH" >&2
+
+    # Primary: focus-free command trigger.
+    run_trigger_and_monitor "command"
+    local result=$?
+
+    # Fallback: if the command trigger could not confirm a compile (e.g. the file
+    # watcher is disabled), try the legacy window-focus trigger once.
+    if [[ $result -eq 2 ]]; then
+        echo "Command trigger did not confirm compilation; trying window-focus fallback..." >&2
+        RETRY_COUNT=0
+        run_trigger_and_monitor "focus"
+        result=$?
     fi
 
     return $result
