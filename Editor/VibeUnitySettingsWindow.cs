@@ -107,8 +107,11 @@ namespace VibeUnity.Editor
             {
                 if (GUILayout.Button("Save Settings"))
                 {
-                    VibeUnitySettings.SaveSettings(settings);
-                    ShowNotification(new GUIContent("Settings saved!"));
+                    if (VibeUnitySettings.SaveSettings(settings))
+                        ShowNotification(new GUIContent("Settings saved!"));
+                    else
+                        EditorUtility.DisplayDialog("Vibe Unity",
+                            "Failed to save settings. See the Console for details.", "OK");
                 }
                 
                 if (GUILayout.Button("Reset to Defaults"))

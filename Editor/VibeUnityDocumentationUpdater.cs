@@ -98,10 +98,21 @@ Vibe Unity enables claude-code integration for Unity scene creation and project 
                 
                 // Generate new documentation section
                 string newSection = GenerateDocumentationSection(packageVersion);
-                
+
                 // Update the file
                 string updatedContent = UpdateDocumentationSection(existingContent, newSection);
-                
+
+                // If the updater declined to modify (e.g. malformed markers), leave
+                // the file untouched rather than risk destroying user content.
+                if (ReferenceEquals(updatedContent, existingContent) || updatedContent == existingContent)
+                {
+                    return false;
+                }
+
+                // Defensive backup before overwriting the user's CLAUDE.md.
+                try { File.Copy(claudeMdPath, claudeMdPath + ".bak", true); }
+                catch (Exception be) { Debug.LogWarning($"[VibeUnity] Could not write CLAUDE.md.bak: {be.Message}"); }
+
                 // Write back to file
                 File.WriteAllText(claudeMdPath, updatedContent);
                 
@@ -122,17 +133,18 @@ Vibe Unity enables claude-code integration for Unity scene creation and project 
         {
             try
             {
-                string packageJsonPath = Path.Combine(Application.dataPath, "..", "Packages", "com.ricoder.vibe-unity", "package.json");
-                if (!File.Exists(packageJsonPath))
-                    return null;
-                    
-                string packageJson = File.ReadAllText(packageJsonPath);
-                var match = Regex.Match(packageJson, @"""version"":\s*""([^""]+)""");
-                
-                return match.Success ? match.Groups[1].Value : null;
+                // Resolve via the package manager rather than a hardcoded path + regex,
+                // which broke when the package id/location differed from the assumption.
+                var pkg = UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(VibeUnityDocumentationUpdater).Assembly);
+                if (pkg != null && !string.IsNullOrEmpty(pkg.version))
+                    return pkg.version;
+
+                Debug.LogWarning("[VibeUnity] Could not resolve package version via PackageInfo.");
+                return null;
             }
-            catch
+            catch (Exception e)
             {
+                Debug.LogWarning($"[VibeUnity] Error resolving package version: {e.Message}");
                 return null;
             }
         }
@@ -284,8 +296,13 @@ Vibe Unity enables claude-code integration for Unity scene creation and project 
                 }
                 else
                 {
-                    // Section start found but no end marker - replace from start marker to end
-                    return existingContent.Substring(0, sectionStart) + newSection;
+                    // Section start found but NO end marker: the file is malformed.
+                    // Previously this truncated everything after the start marker,
+                    // silently destroying any user content below it. Refuse instead
+                    // and leave the file untouched (caller skips the write).
+                    Debug.LogWarning("[VibeUnity] CLAUDE.md has a Vibe Unity start marker but no end marker; " +
+                                     "refusing to modify to avoid deleting user content. Fix or remove the marker.");
+                    return existingContent;
                 }
             }
             else

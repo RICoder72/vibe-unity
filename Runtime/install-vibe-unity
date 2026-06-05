@@ -1,7 +1,9 @@
 #!/bin/bash
 
-# Unity Vibe CLI - Installation Script for WSL
-# This script copies vibe-unity to the project root for easy access
+# Unity Vibe CLI - Installation Script (WSL + git-bash)
+# Copies vibe-unity to the project root for easy access.
+
+set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -15,58 +17,63 @@ echo ""
 
 # Check if source vibe-unity script exists
 if [ ! -f "$SOURCE_VIBE_UNITY" ]; then
-    echo "❌ Error: vibe-unity script not found at $SOURCE_VIBE_UNITY"
+    echo "ERROR: vibe-unity script not found at $SOURCE_VIBE_UNITY" >&2
     exit 1
 fi
 
 # Copy vibe-unity to project root
 if cp "$SOURCE_VIBE_UNITY" "$TARGET_VIBE_UNITY"; then
-    echo "✅ Copied vibe-unity to project root"
+    echo "[OK] Copied vibe-unity to project root"
 else
-    echo "❌ Failed to copy vibe-unity to project root"
+    echo "ERROR: Failed to copy vibe-unity to project root" >&2
     exit 1
 fi
 
-# Make sure the script is executable
-chmod +x "$TARGET_VIBE_UNITY"
-echo "✅ Made vibe-unity executable"
+# Make the script executable (non-fatal on filesystems that ignore the mode bit)
+chmod +x "$TARGET_VIBE_UNITY" 2>/dev/null \
+    || echo "WARNING: could not mark vibe-unity executable (chmod failed)" >&2
 
-# Test Unity installation
+# Detect the newest installed Unity across WSL (/mnt/c) and git-bash (/c) mounts.
+find_unity_exe() {
+    local base candidates=()
+    for base in \
+        "/mnt/c/Program Files/Unity/Hub/Editor" \
+        "/c/Program Files/Unity/Hub/Editor"; do
+        [[ -d "$base" ]] || continue
+        while IFS= read -r exe; do
+            [[ -n "$exe" ]] && candidates+=("$exe")
+        done < <(find "$base" -maxdepth 2 -name Unity.exe 2>/dev/null)
+    done
+    [[ ${#candidates[@]} -gt 0 ]] && printf '%s\n' "${candidates[@]}" | sort -V | tail -1
+}
+
 echo ""
-echo "🔍 Checking Unity installation..."
-
-if command -v /mnt/c/Program\ Files/Unity/Hub/Editor/*/Editor/Unity.exe >/dev/null 2>&1; then
-    UNITY_PATH=$(find /mnt/c/Program\ Files/Unity/Hub/Editor/*/Editor/Unity.exe | head -1)
-    echo "✅ Unity found at: $UNITY_PATH"
+echo "Checking Unity installation..."
+UNITY_PATH="$(find_unity_exe)"
+if [ -n "$UNITY_PATH" ]; then
+    echo "[OK] Unity found at: $UNITY_PATH"
 else
-    echo "❌ Unity Editor not found in standard locations"
-    echo "   Please ensure Unity is installed via Unity Hub"
-    echo "   Expected location: /mnt/c/Program Files/Unity/Hub/Editor/*/Editor/Unity.exe"
+    echo "[WARN] Unity Editor not found in standard Unity Hub locations"
+    echo "       Install Unity via Unity Hub if you need batch-mode commands."
 fi
 
 echo ""
-echo "🎉 Installation complete!"
-echo ""
-echo "Usage:"
-echo "From your Unity project root directory, run:"
+echo "Usage (run from your Unity project root directory):"
 echo "  ./vibe-unity --help"
 echo "  ./vibe-unity create-scene MyScene Assets/Scenes"
 echo "  ./vibe-unity add-canvas MainCanvas"
 echo ""
-echo "Important notes:"
-echo "• Unity Editor must be closed before running CLI commands"
-echo "• Run commands from your Unity project root directory"
-echo ""
 
-# Test if we can run vibe-unity
-echo "🧪 Testing installation..."
-if "$TARGET_VIBE_UNITY" --version >/dev/null 2>&1; then
-    echo "✅ vibe-unity is working correctly"
+# Self-test: confirm the installed script is runnable and reports a version.
+# (This validates the install, not the Unity connection.)
+echo "Testing installation..."
+if VERSION_OUT="$("$TARGET_VIBE_UNITY" --version 2>/dev/null)" && [ -n "$VERSION_OUT" ]; then
+    echo "[OK] vibe-unity is runnable: $VERSION_OUT"
 else
-    echo "❌ vibe-unity test failed - check Unity installation"
+    echo "[FAIL] vibe-unity did not run correctly" >&2
 fi
 
 echo ""
 echo "Installation summary:"
-echo "• Script location: $TARGET_VIBE_UNITY"
-echo "• Unity detected: $([ -n "$UNITY_PATH" ] && echo "Yes" || echo "No")"
+echo "  Script location: $TARGET_VIBE_UNITY"
+echo "  Unity detected:  $([ -n "$UNITY_PATH" ] && echo "Yes" || echo "No")"

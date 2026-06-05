@@ -256,12 +256,16 @@ namespace VibeUnity.Editor
                     return true;
                 }
 
-                logCapture?.AppendLine($"   └─ Warning: Parameter '{param.name}' not found on component");
+                logCapture?.AppendLine($"   - Warning: Parameter '{param.name}' not found on component");
+                Debug.LogWarning($"[VibeUnity] Parameter '{param.name}' not found on {component.GetType().Name}");
                 return false;
             }
             catch (System.Exception e)
             {
-                logCapture?.AppendLine($"   └─ Error setting parameter '{param.name}': {e.Message}");
+                // Surface the failure even when no log buffer was supplied, so the
+                // caller can no longer silently believe the parameter was applied.
+                logCapture?.AppendLine($"   - Error setting parameter '{param.name}': {e.Message}");
+                Debug.LogWarning($"[VibeUnity] Failed to set '{param.name}' = '{param.value}' on {component.GetType().Name}: {e.Message}");
                 return false;
             }
         }
@@ -271,78 +275,60 @@ namespace VibeUnity.Editor
         /// </summary>
         private static object ConvertParameterValue(string value, string paramType, System.Type targetType)
         {
-            try
-            {
-                // Handle null/empty values
-                if (string.IsNullOrEmpty(value))
-                {
-                    return targetType.IsValueType ? System.Activator.CreateInstance(targetType) : null;
-                }
+            // NOTE: this intentionally THROWS on malformed input instead of silently
+            // returning a type default. The caller (SetComponentParameter) catches it,
+            // logs, and returns false — so a bad value can no longer be reported as a
+            // successful set. Uses InvariantCulture so comma-decimal locales don't
+            // mis-parse "1.5" or collide with the comma delimiter.
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
 
-                // Handle common types
-                if (targetType == typeof(int))
-                    return int.Parse(value);
-                if (targetType == typeof(float))
-                    return float.Parse(value);
-                if (targetType == typeof(double))
-                    return double.Parse(value);
-                if (targetType == typeof(bool))
-                    return bool.Parse(value);
-                if (targetType == typeof(string))
-                    return value;
-
-                // Handle Unity types
-                if (targetType == typeof(Vector3))
-                {
-                    string[] parts = value.Split(',');
-                    if (parts.Length >= 3)
-                    {
-                        return new Vector3(
-                            float.Parse(parts[0].Trim()),
-                            float.Parse(parts[1].Trim()),
-                            float.Parse(parts[2].Trim())
-                        );
-                    }
-                }
-
-                if (targetType == typeof(Vector2))
-                {
-                    string[] parts = value.Split(',');
-                    if (parts.Length >= 2)
-                    {
-                        return new Vector2(
-                            float.Parse(parts[0].Trim()),
-                            float.Parse(parts[1].Trim())
-                        );
-                    }
-                }
-
-                if (targetType == typeof(Color))
-                {
-                    Color color;
-                    if (ColorUtility.TryParseHtmlString(value, out color))
-                        return color;
-
-                    string[] parts = value.Split(',');
-                    if (parts.Length >= 3)
-                    {
-                        return new Color(
-                            float.Parse(parts[0].Trim()),
-                            float.Parse(parts[1].Trim()),
-                            float.Parse(parts[2].Trim()),
-                            parts.Length > 3 ? float.Parse(parts[3].Trim()) : 1f
-                        );
-                    }
-                }
-
-                // Try generic conversion
-                return System.Convert.ChangeType(value, targetType);
-            }
-            catch
-            {
-                // Return default value for type if conversion fails
+            // Empty -> type default (explicitly allowed).
+            if (string.IsNullOrEmpty(value))
                 return targetType.IsValueType ? System.Activator.CreateInstance(targetType) : null;
+
+            if (targetType == typeof(int))    return int.Parse(value, inv);
+            if (targetType == typeof(float))  return float.Parse(value, inv);
+            if (targetType == typeof(double)) return double.Parse(value, inv);
+            if (targetType == typeof(bool))   return bool.Parse(value);
+            if (targetType == typeof(string)) return value;
+
+            if (targetType == typeof(Vector3))
+            {
+                string[] parts = value.Split(',');
+                if (parts.Length < 3)
+                    throw new System.FormatException($"Vector3 needs 3 comma-separated values, got '{value}'");
+                return new Vector3(
+                    float.Parse(parts[0].Trim(), inv),
+                    float.Parse(parts[1].Trim(), inv),
+                    float.Parse(parts[2].Trim(), inv));
             }
+
+            if (targetType == typeof(Vector2))
+            {
+                string[] parts = value.Split(',');
+                if (parts.Length < 2)
+                    throw new System.FormatException($"Vector2 needs 2 comma-separated values, got '{value}'");
+                return new Vector2(
+                    float.Parse(parts[0].Trim(), inv),
+                    float.Parse(parts[1].Trim(), inv));
+            }
+
+            if (targetType == typeof(Color))
+            {
+                if (ColorUtility.TryParseHtmlString(value, out Color color))
+                    return color;
+                string[] parts = value.Split(',');
+                if (parts.Length < 3)
+                    throw new System.FormatException($"Color needs an html string or 3-4 comma values, got '{value}'");
+                return new Color(
+                    float.Parse(parts[0].Trim(), inv),
+                    float.Parse(parts[1].Trim(), inv),
+                    float.Parse(parts[2].Trim(), inv),
+                    parts.Length > 3 ? float.Parse(parts[3].Trim(), inv) : 1f);
+            }
+
+            // Generic fallback (throws on failure, which the caller handles).
+            return System.Convert.ChangeType(value, targetType, inv);
         }
 
 

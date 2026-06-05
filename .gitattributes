@@ -1,0 +1,7 @@
+# Shell scripts MUST use LF line endings, or bash on Windows/WSL/git-bash fails
+# with errors like "$'\r': command not found". Force LF regardless of core.autocrlf.
+*.sh text eol=lf
+
+# Extensionless shell tools shipped by this package.
+Runtime/vibe-unity        text eol=lf
+Runtime/install-vibe-unity text eol=lf

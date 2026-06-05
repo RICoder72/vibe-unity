@@ -81,18 +81,30 @@ namespace VibeUnity.Editor
                     outputPath = scenePath;
                 }
                 
-                // Export the scene state manually as JSON
-                string jsonContent = ExportSceneToJsonManually(activeScene);
-                
-                // Write to file
+                // Build the FULL scene state (every component, transform, UI info,
+                // scene settings, asset refs and a coverage report) and serialize with
+                // JsonUtility so it round-trips with the importer (FromJson<SceneState>).
+                // This replaces the old hand-built JSON that silently dropped all
+                // non-script components and produced a schema the importer couldn't read.
+                SceneState state = ExportSceneToFullState(activeScene);
+                string jsonContent = JsonUtility.ToJson(state, true);
                 File.WriteAllText(outputPath, jsonContent);
-                
-                Debug.Log($"[VibeUnitySceneExporter] ✅ Scene state exported (manual JSON): {outputPath}");
-                Debug.Log($"[VibeUnitySceneExporter] File size: {new FileInfo(outputPath).Length} bytes");
-                
+
+                var summary = state.coverageReport != null ? state.coverageReport.summary : null;
+                if (summary != null)
+                {
+                    Debug.Log($"[VibeUnitySceneExporter] Scene state exported: {outputPath} " +
+                              $"({summary.totalGameObjects} objects, {summary.totalComponents} components, " +
+                              $"{summary.coveragePercentage:F0}% coverage, canRebuild={summary.canFullyRebuild})");
+                }
+                else
+                {
+                    Debug.Log($"[VibeUnitySceneExporter] Scene state exported: {outputPath}");
+                }
+
                 // Refresh asset database to show new file
                 AssetDatabase.Refresh();
-                
+
                 return true;
             }
             catch (Exception e)
@@ -104,7 +116,41 @@ namespace VibeUnity.Editor
         }
         
         /// <summary>
-        /// Exports scene directly to JSON string with manual building (ULTRA-MINIMALIST)
+        /// Builds a complete SceneState (all components, transforms, UI info, scene
+        /// settings, asset references and a coverage report) using the full export
+        /// helpers. This is the authoritative representation the importer consumes.
+        /// </summary>
+        private static SceneState ExportSceneToFullState(Scene scene)
+        {
+            var assetReferences = new HashSet<string>();
+            var coverageData = new CoverageAnalysisData();
+            var gameObjectsList = new List<GameObjectInfo>();
+
+            foreach (GameObject root in scene.GetRootGameObjects())
+            {
+                ExportGameObjectRecursive(root, "", gameObjectsList, assetReferences, coverageData);
+            }
+
+            var metadata = ExportSceneMetadata(scene);
+            metadata.totalGameObjects = gameObjectsList.Count;
+            metadata.totalComponents = coverageData.GetTotalComponents();
+
+            return new SceneState
+            {
+                version = "2.0",
+                exportTime = DateTime.Now,
+                metadata = metadata,
+                gameObjects = gameObjectsList.ToArray(),
+                settings = ExportSceneSettings(),
+                assetReferences = new List<string>(assetReferences).ToArray(),
+                coverageReport = GenerateCoverageReport(coverageData, gameObjectsList.Count)
+            };
+        }
+
+        /// <summary>
+        /// DEPRECATED and UNUSED: hand-built JSON that dropped non-script components
+        /// and did not match the importer schema. Retained only for reference; the
+        /// live path now uses ExportSceneToFullState. Do not call.
         /// </summary>
         private static string ExportSceneToJsonManually(Scene scene)
         {

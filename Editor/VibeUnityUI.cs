@@ -407,7 +407,19 @@ namespace VibeUnity.Editor
                 // Assign references to ScrollRect
                 scrollRect.viewport = viewportRect;
                 scrollRect.content = contentRect;
-                
+
+                // Create and wire actual Scrollbar objects so the visibility modes
+                // (e.g. AutoHideAndExpandViewport) function. Previously the visibility
+                // was set but no scrollbars existed and the references stayed null.
+                if (horizontal)
+                {
+                    scrollRect.horizontalScrollbar = CreateScrollbar(scrollViewGO, false);
+                }
+                if (vertical)
+                {
+                    scrollRect.verticalScrollbar = CreateScrollbar(scrollViewGO, true);
+                }
+
                 // Log detailed success information
                 Debug.Log($"[VibeUnity] ✅ SUCCESS: Created scroll view '{scrollViewName}'");
                 Debug.Log($"[VibeUnity]    └─ Parent: {parent.name} (Type: {parent.GetComponent<Canvas>()?.GetType().Name ?? parent.GetType().Name})");
@@ -435,7 +447,59 @@ namespace VibeUnity.Editor
         #endregion
         
         #region Helper Methods
-        
+
+        /// <summary>
+        /// Creates a functional Scrollbar (background + sliding area + handle) parented
+        /// to the scroll view, matching the structure Unity's UI menu produces.
+        /// </summary>
+        private static Scrollbar CreateScrollbar(GameObject scrollViewGO, bool vertical)
+        {
+            string name = vertical ? "Scrollbar Vertical" : "Scrollbar Horizontal";
+            GameObject sbGO = new GameObject(name);
+            sbGO.transform.SetParent(scrollViewGO.transform, false);
+
+            RectTransform sbRect = sbGO.AddComponent<RectTransform>();
+            if (vertical)
+            {
+                sbRect.anchorMin = new Vector2(1, 0);
+                sbRect.anchorMax = new Vector2(1, 1);
+                sbRect.pivot = new Vector2(1, 1);
+                sbRect.sizeDelta = new Vector2(20, 0);
+            }
+            else
+            {
+                sbRect.anchorMin = new Vector2(0, 0);
+                sbRect.anchorMax = new Vector2(1, 0);
+                sbRect.pivot = new Vector2(0, 0);
+                sbRect.sizeDelta = new Vector2(0, 20);
+            }
+
+            Image sbImage = sbGO.AddComponent<Image>();
+            sbImage.color = new Color(0.86f, 0.86f, 0.86f, 1f);
+
+            Scrollbar scrollbar = sbGO.AddComponent<Scrollbar>();
+            scrollbar.direction = vertical ? Scrollbar.Direction.BottomToTop : Scrollbar.Direction.LeftToRight;
+
+            GameObject slidingArea = new GameObject("Sliding Area");
+            slidingArea.transform.SetParent(sbGO.transform, false);
+            RectTransform saRect = slidingArea.AddComponent<RectTransform>();
+            saRect.anchorMin = Vector2.zero;
+            saRect.anchorMax = Vector2.one;
+            saRect.offsetMin = new Vector2(10, 10);
+            saRect.offsetMax = new Vector2(-10, -10);
+
+            GameObject handle = new GameObject("Handle");
+            handle.transform.SetParent(slidingArea.transform, false);
+            RectTransform handleRect = handle.AddComponent<RectTransform>();
+            handleRect.sizeDelta = new Vector2(20, 20);
+            Image handleImage = handle.AddComponent<Image>();
+            handleImage.color = new Color(0.66f, 0.66f, 0.66f, 1f);
+
+            scrollbar.handleRect = handleRect;
+            scrollbar.targetGraphic = handleImage;
+            return scrollbar;
+        }
+
         /// <summary>
         /// Parses render mode from string
         /// </summary>

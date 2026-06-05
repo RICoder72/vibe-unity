@@ -64,6 +64,14 @@ namespace VibeUnity.Editor
                 logCapture.AppendLine($"✅ Batch file loaded: {batchFile.commands.Length} commands");
                 logCapture.AppendLine($"Description: {batchFile.description}");
                 logCapture.AppendLine();
+
+                // Detect editor-control-only batches (e.g. recompile) so we skip the
+                // scene save/export tail for them.
+                bool onlyControlCommands = true;
+                foreach (var c in batchFile.commands)
+                {
+                    if (!IsControlCommand(c.action)) { onlyControlCommands = false; break; }
+                }
                 
                 // Handle scene configuration if present (JsonUtility never returns null for
                 // object fields, so check name is non-empty to detect an actual scene block)
@@ -97,37 +105,44 @@ namespace VibeUnity.Editor
                     logCapture.AppendLine();
                 }
                 
-                // Save all scenes after batch execution
-                logCapture.AppendLine("Saving scenes and refreshing asset database...");
-                // Force save the active scene specifically
-                VibeUnityScenes.ForceSaveActiveScene();
-                // Also save any other open scenes
-                EditorSceneManager.SaveOpenScenes();
-                AssetDatabase.Refresh();
-                logCapture.AppendLine("✅ Scenes saved and asset database refreshed");
-                
-                // Generate scene state artifact after batch processing
-                logCapture.AppendLine("Generating scene state artifact...");
-                try
+                if (!onlyControlCommands)
                 {
-                    if (VibeUnitySceneExporter.ExportActiveSceneState())
+                    // Save all scenes after batch execution
+                    logCapture.AppendLine("Saving scenes and refreshing asset database...");
+                    // Force save the active scene specifically
+                    VibeUnityScenes.ForceSaveActiveScene();
+                    // Also save any other open scenes
+                    EditorSceneManager.SaveOpenScenes();
+                    AssetDatabase.Refresh();
+                    logCapture.AppendLine("✅ Scenes saved and asset database refreshed");
+
+                    // Generate scene state artifact after batch processing
+                    logCapture.AppendLine("Generating scene state artifact...");
+                    try
                     {
-                        logCapture.AppendLine("✅ Scene state artifact generated successfully");
-                        logCapture.AppendLine("   └─ State file saved alongside scene file");
-                        logCapture.AppendLine("   └─ Coverage analysis report generated");
+                        if (VibeUnitySceneExporter.ExportActiveSceneState())
+                        {
+                            logCapture.AppendLine("✅ Scene state artifact generated successfully");
+                            logCapture.AppendLine("   └─ State file saved alongside scene file");
+                            logCapture.AppendLine("   └─ Coverage analysis report generated");
+                        }
+                        else
+                        {
+                            logCapture.AppendLine("⚠️ Warning: Scene state artifact generation failed");
+                            logCapture.AppendLine("   └─ Check console for export error details");
+                        }
                     }
-                    else
+                    catch (System.Exception e)
                     {
-                        logCapture.AppendLine("⚠️ Warning: Scene state artifact generation failed");
-                        logCapture.AppendLine("   └─ Check console for export error details");
+                        logCapture.AppendLine($"⚠️ Warning: Exception during scene state export: {e.Message}");
+                        logCapture.AppendLine("   └─ Batch processing completed successfully despite export issue");
                     }
                 }
-                catch (System.Exception e)
+                else
                 {
-                    logCapture.AppendLine($"⚠️ Warning: Exception during scene state export: {e.Message}");
-                    logCapture.AppendLine("   └─ Batch processing completed successfully despite export issue");
+                    logCapture.AppendLine("Control-only batch (recompile/refresh): skipping scene save/export.");
                 }
-                
+
                 overallSuccess = true;
                 return true;
             }
@@ -142,9 +157,75 @@ namespace VibeUnity.Editor
             }
             finally
             {
-                // Save the log file
+                // Save the human-readable log...
                 SaveLogFile(jsonFilePath, logCapture, overallSuccess);
+                // ...and a machine-readable result the external agent can poll.
+                SaveResultFile(jsonFilePath, overallSuccess, logCapture);
             }
+        }
+
+        /// <summary>
+        /// Writes a structured, machine-readable result next to the logs so the
+        /// external agent can determine the outcome deterministically instead of
+        /// scraping free-text/emoji log lines.
+        /// </summary>
+        private static void SaveResultFile(string jsonFilePath, bool success, StringBuilder logCapture)
+        {
+            try
+            {
+                string commandsDir = Path.GetDirectoryName(jsonFilePath); // .vibe-unity/commands
+                string resultsDir = Path.Combine(commandsDir, "results");
+                Directory.CreateDirectory(resultsDir);
+
+                // Best-effort extraction of failure lines, ASCII-only (no emoji
+                // literals in source - those are fragile). Only when the batch failed;
+                // a successful batch reports no errors.
+                var errors = new System.Collections.Generic.List<string>();
+                if (!success)
+                {
+                    foreach (var raw in logCapture.ToString().Split('\n'))
+                    {
+                        string t = raw.Trim();
+                        if (t.Length == 0) continue;
+                        string lower = t.ToLowerInvariant();
+                        if (lower.Contains("success")) continue; // skip success lines
+                        if (lower.Contains("error") || lower.Contains("fail") ||
+                            lower.Contains("exception") || lower.Contains("not found") ||
+                            lower.Contains("fatal") || lower.Contains("could not"))
+                        {
+                            errors.Add(StripLeadingNonAscii(t));
+                        }
+                    }
+                }
+
+                var result = new BatchResult
+                {
+                    schemaVersion = 1,
+                    sourceFile = Path.GetFileName(jsonFilePath),
+                    success = success,
+                    status = success ? "SUCCESS" : "FAILURE",
+                    timestampUtc = System.DateTime.UtcNow.ToString("o"),
+                    message = success ? "Batch completed." : "Batch failed; see corresponding .log.",
+                    errors = errors.ToArray()
+                };
+
+                string json = JsonUtility.ToJson(result, true);
+                string baseName = Path.GetFileNameWithoutExtension(jsonFilePath);
+                File.WriteAllText(Path.Combine(resultsDir, baseName + ".result.json"), json);
+                File.WriteAllText(Path.Combine(resultsDir, "latest.result.json"), json);
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning($"[VibeUnity] Failed to write result file: {e.Message}");
+            }
+        }
+
+        /// <summary>Drops leading non-ASCII (e.g. emoji) and whitespace from a line.</summary>
+        private static string StripLeadingNonAscii(string s)
+        {
+            int i = 0;
+            while (i < s.Length && (s[i] > 127 || char.IsWhiteSpace(s[i]))) i++;
+            return s.Substring(i);
         }
         
         /// <summary>
@@ -280,9 +361,43 @@ namespace VibeUnity.Editor
                     return ExecuteAddComponentCommandWithLogging(command, logCapture);
                 case "add-gameobject":
                     return ExecuteAddGameObjectCommandWithLogging(command, logCapture);
+                case "recompile":
+                case "refresh":
+                    return ExecuteRecompileCommandWithLogging(command, logCapture);
                 default:
-                    logCapture.AppendLine($"❌ ERROR: Unknown batch command: {command.action}");
+                    logCapture.AppendLine($"ERROR: Unknown batch command: {command.action}");
                     return false;
+            }
+        }
+
+        /// <summary>
+        /// Whether an action only controls the editor (no scene mutation), so the
+        /// scene save/export tail can be skipped.
+        /// </summary>
+        private static bool IsControlCommand(string action)
+        {
+            string a = (action ?? "").ToLower();
+            return a == "recompile" || a == "refresh";
+        }
+
+        /// <summary>
+        /// Requests an asset refresh + script recompilation. This is the deterministic,
+        /// focus-free alternative to stealing the Unity window with AppActivate.
+        /// </summary>
+        private static bool ExecuteRecompileCommandWithLogging(BatchCommand command, StringBuilder logCapture)
+        {
+            try
+            {
+                logCapture.AppendLine("Executing recompile command...");
+                AssetDatabase.Refresh();
+                UnityEditor.Compilation.CompilationPipeline.RequestScriptCompilation();
+                logCapture.AppendLine("SUCCESS: requested AssetDatabase.Refresh + script compilation");
+                return true;
+            }
+            catch (System.Exception e)
+            {
+                logCapture.AppendLine($"FAIL: recompile request failed: {e.Message}");
+                return false;
             }
         }
         
@@ -678,13 +793,20 @@ namespace VibeUnity.Editor
                     return false;
                 }
                 
-                // Set component parameters if provided
+                // Set component parameters if provided. Surface failures instead of
+                // discarding the result and reporting unconditional success.
                 if (command.parameters != null && command.parameters.Length > 0)
                 {
-                    VibeUnityGameObjects.SetComponentParameters(addedComponent, command.parameters, logCapture);
+                    bool paramsOk = VibeUnityGameObjects.SetComponentParameters(addedComponent, command.parameters, logCapture);
+                    if (!paramsOk)
+                    {
+                        logCapture.AppendLine($"FAIL: one or more parameters on '{componentTypeName}' could not be applied (see above)");
+                        VibeUnityScenes.MarkActiveSceneDirty();
+                        return false;
+                    }
                 }
-                
-                logCapture.AppendLine($"✅ Component '{componentTypeName}' added successfully to '{targetName}'");
+
+                logCapture.AppendLine($"SUCCESS: Component '{componentTypeName}' added to '{targetName}'");
                 
                 // Mark scene as dirty to ensure changes are saved
                 VibeUnityScenes.MarkActiveSceneDirty();
@@ -822,7 +944,23 @@ namespace VibeUnity.Editor
     }
     
     #region Data Structures
-    
+
+    /// <summary>
+    /// Machine-readable result written to .vibe-unity/commands/results/ so an
+    /// external agent can poll a definitive outcome instead of scraping logs.
+    /// </summary>
+    [System.Serializable]
+    public class BatchResult
+    {
+        public int schemaVersion;
+        public string sourceFile;
+        public bool success;
+        public string status;       // "SUCCESS" | "FAILURE"
+        public string timestampUtc;
+        public string message;
+        public string[] errors;
+    }
+
     /// <summary>
     /// Root structure for batch command files
     /// </summary>
