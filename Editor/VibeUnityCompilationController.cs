@@ -228,21 +228,14 @@ namespace VibeUnity.Editor
                 
                 string json = JsonUtility.ToJson(statusData, true);
                 File.WriteAllText(currentStatusFile, json);
-                
-                // Also update the legacy compilation.json for backward compatibility
-                string legacyFile = Path.Combine(Directory.GetParent(compilationDir).FullName, "status", "compilation.json");
-                if (Directory.Exists(Path.GetDirectoryName(legacyFile)))
-                {
-                    var legacyData = new
-                    {
-                        status = status == "success" ? "complete" : status,
-                        started = status == "compiling" ? (long?)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() : null,
-                        startedMs = status == "compiling" ? (long?)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() : null,
-                        ended = status != "compiling" ? DateTimeOffset.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'") : null,
-                        endedMs = status != "compiling" ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() : 0
-                    };
-                    File.WriteAllText(legacyFile, JsonUtility.ToJson(legacyData));
-                }
+
+                // NOTE: status/compilation.json is intentionally NOT written here.
+                // VibeUnitySystem's compilation tracker owns that file and writes it
+                // with an exclusive file lock during compilation (the compile-check
+                // script relies on that lock for its "compiling" detection). The
+                // previous write here both raced with that writer and was broken -
+                // JsonUtility cannot serialize an anonymous type, so it produced "{}".
+                // This controller owns the richer current-status.json / last-errors.json.
             }
             catch (Exception e)
             {
